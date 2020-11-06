@@ -3,3 +3,5 @@ Using counting and saber-metric stats from joining the lahmen, MLBAnalys, and Ba
 
 This is a current and the most recent project of mine. Soon to include full paper and dashboard. 
 A binary classification problem with extreme class imbalance while joining multiple extremely noisey datasets. 
+
+Feature engineering, Data Cleaning, Data Manipulation, UMAP, Logistic Regression, Random Forrest, NN
