@@ -1,0 +1,322 @@
+---
+title: "TJ Feature Engineering"
+author: "Tim Morales"
+date: "10/24/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
+```
+
+Im going to drop a lot of the tommy john info as its either irrelevant or repeated elsewhere. 
+
+Dropping and Flagging Variables 
+```{r}
+## removing random surgery information 
+df<-df[, -c(185:228)]
+
+# make yearID and TJ a factor
+df$yearID <- as.factor(df$yearID)
+df$TJ<-as.factor(df$TJ)
+levels(df$TJ) = c("No", "Yes")
+
+
+#make a made postseason flag 
+df$made_postseason = as.factor(ifelse(is.na(df$post_IPouts),0,1))
+
+#i can fill playoff NAs with 0 
+df[,c(162:186)][is.na(df[c(162:186)])] <- 0
+
+#Making a pitchs per game stat 
+df$pitches_per_ganes<- (df$pitch_count / df$p_game)
+
+#Percentages if NA set to 0 
+formatted.names<- c("n_ff_formatted","n_sl_formatted","n_ch_formatted","n_cukc_formatted","n_sift_formatted","n_fc_formatted","n_kn_formatted","n_fs_formatted", "n_fastball_formatted","n_breaking_formatted","n_offspeed_formatted")
+df[formatted.names][is.na(df[formatted.names])] <- 0
+
+
+```
+
+
+Previous paper shows warm high schools increase risk. We use birth place and assign based on states in paper as well as handselected warm countries. 
+
+```{r}
+#warm weather indicator 
+warmstates<- c("CA","AZ","NM","TX","LA","MS","AL","GA","FL","SC")
+outsideUSCold<-c("Lithuania","Germany","CAN", "USA")
+#print all countries 
+levels(as.factor(df$birthCountry))
+
+df$warm_birth_place <- ifelse(df$birthState %in% warmstates,1,0)
+#make "notin"
+`%notin%` <- Negate(`%in%`)
+#outside US 
+df$warm_birth_place <- as.factor(ifelse(df$birthCountry %notin% outsideUSCold,1,df$warm_birth_place))
+```
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+#drop the 1 missing player nameFirst
+#which(is.na(df$nameFirst.x))
+df<-df[-3581,]
+### check miss to be fixed 
+# colSums(is.na(df))
+#i drop the below columns because theyre either not usefully or impossible to impute
+df<- df %>% 
+   mutate(debut = ymd(debut)) %>% 
+  mutate_at(vars(debut), funs(year, month, day))%>%
+  select(-c("meatball_swing_percent", "deathYear","deathMonth","deathDay","deathCountry","deathState","deathCity", "nameLast.y","nameFirst.y","X","X.1","birthMonth","birthDay","birthCountry","birthState","birthCity","nameGiven", "finalGame", "day", "debut", "n"))
+
+#make the debut variable into year and month of debut 
+df <- rename(df, c("year_debut" = "year" , "month_debut"= "month"))
+df1<-df
+```
+
+Bin variables with lots of missing 
+```{r}
+
+df.not.bin<- df
+
+col.w.na = colSums(is.na(df)) > 0
+ 
+
+library(OneR)
+
+col.w.na.names<-colnames(df)[col.w.na]
+# col.w.na.names
+
+#i make the function i want 
+bin.omit.false<- function(x){
+  bin(x, nbins = 4, na.omit = F, labels = c("Bottom 25", "Q2", "Q3", "Top 25")) }
+
+doesnt.throw<- function(x){
+  x<-ifelse(is.na(x), "Does Not Throw", x)
+}
+
+df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
+
+```
+
+
+One hot encode the factors using recipe 
+
+```{r}
+# Drop identifying character variables 
+
+library(recipes)
+
+df.onehot <- df %>%
+  select(- c("nameLast.x", "nameFirst.x", "PlayerName", "playerID", "teamID", "retroID", "bbrefID"))
+
+
+
+rec = recipe( ~ ., data = df.onehot)
+rec_2 = rec %>% 
+  step_normalize(all_predictors(),-all_nominal())%>%
+  step_dummy(all_predictors(),-all_numeric(), one_hot = T)
+d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
+
+df.juice<-juice(d_prep)
+
+
+```
+
+
+SMOTE for class imbalance and test train split
+
+```{r}
+library(DMwR)
+library(caret)
+set.seed(23)
+train.indx <- createDataPartition(df.juice$TJ_Yes, p = .8, list = F)
+
+
+train.set<-data.frame(df.juice[train.indx,- c(101,102,382)])
+
+test.set<-data.frame(df.juice[-train.indx,- c(101,102,382)])
+y<-as.factor(test.set$TJ_Yes)
+test.set<- test.set %>%
+  select(-c("TJ_Yes"))
+
+#make factor
+train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
+
+
+#check balance 
+prop.table(table(train.set$TJ_Yes))
+prop.table(table(y))
+
+trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 3000, perc.under = 1000)
+
+prop.table(table(trainSplit$TJ_Yes))
+```
+
+Model fit basic logistic regression (code takes long to run did not execute)
+
+```{r eval=FALSE, include=TRUE}
+library(caret)
+
+levels(trainSplit$TJ_Yes) <- c("No", "Yes")
+
+ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
+logitmodel <- train(TJ_Yes ~ ., data = trainSplit, method = "glm",trControl = ctrl, family = "binomial")
+
+
+logitmodel
+
+confusionMatrix(logitmodel)
+
+train.pred<-predict(logitmodel, trainSplit)
+
+confusionMatrix(train.pred, trainSplit$TJ_Yes, positive = "Yes")
+
+preds.<-predict(logitmodel, test.set, type = "prob")
+
+preds<- ifelse( preds.$Yes > .999, "Yes", "No")
+
+levels(y)<- c("No", "Yes")
+
+confusionMatrix(as.factor(preds), y, positive = "Yes")
+
+levels(y)
+
+levels(preds)
+cutoffs <- seq(0.1,0.9,0.1)
+accuracy <- NULL
+for (i in seq(along = cutoffs)){
+prediction <- ifelse(logitmodel$finalModel$fitted.values >= cutoffs[i], 1, 0) 
+accuracy <- c(accuracy,length(which(y==prediction))/length(prediction)*100)
+}
+
+plot(cutoffs,accuracy)
+
+pred<-predict(logitmodel, test.set,)
+
+prop.table(table(pred))
+
+confusionMatrix(pred, y, positive = "Yes")
+
+```
+
+
+
+In order to avoid massive data loss, we need to bin and factorize some of the highly missing variables of interest like spin rate and velocity. For spin rate and velcoity, we use break into (top10%, top25% top50%, bottom25%, doesnt throw pitch).
+
+For break will split into quantiles 
+
+I used Uniform Manifold Approximation Projection to visualize data and reduce dimensions to asses clustering effect. 
+```{r}
+library(umap)
+
+
+df.map<-umap(df.juice[,-c(382:383)])
+umap.plot<-function(x, labels,
+          main="A UMAP visualization of the Tommy John dataset",
+          colors=c("grey", "red"),
+          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
+          cex.main=1, cex.legend=1) {
+         layout = x   
+         if (is(x, "umap")) {     layout = x$layout
+         } 
+   
+       xylim = range(layout)
+       xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
+      if (!add) {
+      par(mar=c(0.2,0.7,1.2,0.7), ps=10)
+     plot(xylim, xylim, type="n", axes=F, frame=F)
+     rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
+   }
+   points(layout[,1], layout[,2], col=colors[as.integer(labels)],
+          cex=cex, pch=pch)
+   mtext(side=3, main, cex=cex.main)
+
+   labels.u = unique(labels)
+   legend.pos = "topright"
+  legend.text = as.character(labels.u)
+   if (add) {
+     legend.pos = "bottomright"
+     legend.text = paste(as.character(labels.u), legend.suffix)
+   }
+   legend(legend.pos, legend=legend.text,
+          col=colors[as.integer(labels.u)],
+          bty="n", pch=pch, cex=cex.legend)
+}
+
+umap.plot(df.map,as.factor(df.juice$TJ_Yes))
+
+
+
+
+
+
+```
+
+UMAP IF I DROP ALL SABERMETRIC DATA 
+```{r}
+library(caret)
+library(umap)
+library(dplyr)
+library(recipes)
+
+df<-df1[ , colSums(is.na(df)) < 500]
+df<-df[, !sapply(df, is.character)]
+df<-na.omit(df)
+TJ<-df$TJ
+ind <- sapply(df, is.numeric)
+df[ind] <- lapply(df[ind], scale)
+
+#onehot factors
+rec = recipe( ~ ., data = df)
+rec_2 = rec %>% step_dummy(all_predictors(),-all_numeric(), one_hot = T)
+d_prep=rec_2 %>% prep(training = df, retain = T)
+
+df.juicel<-juice(d_prep)
+
+
+df.map<-umap(df.juicel[,-c(128:129)])
+umap.plot<-function(x, labels,
+          main="A UMAP visualization of the Tommy John dataset",
+          colors=c("grey", "red"),
+          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
+          cex.main=1, cex.legend=1) {
+         layout = x   
+         if (is(x, "umap")) {     layout = x$layout
+         } 
+   
+         xylim = range(layout)
+         xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
+         if (!add) {
+            par(mar=c(0.2,0.7,1.2,0.7), ps=10)
+            plot(xylim, xylim, type="n", axes=F, frame=F)
+            rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
+   }
+         points(layout[,1], layout[,2], col=colors[as.integer(labels)],
+          cex=cex, pch=pch)
+         mtext(side=3, main, cex=cex.main)
+
+         labels.u = unique(labels)
+         legend.pos = "topright"
+         legend.text = as.character(labels.u)
+   if (add) {
+     legend.pos = "bottomright"
+     legend.text = paste(as.character(labels.u), legend.suffix)
+   }
+   legend(legend.pos, legend=legend.text,
+          col=colors[as.integer(labels.u)],
+          bty="n", pch=pch, cex=cex.legend)
+}
+
+umap.plot(df.map,as.factor(df.juice$TJ_Yes))
+
+
+
+```
