@@ -97,10 +97,10 @@ col.w.na.names<-colnames(df)[col.w.na]
 
 #i make the function i want 
 bin.omit.false<- function(x){
-  bin(x, nbins = 4, na.omit = F, labels = c("Bottom 25", "Q2", "Q3", "Top 25")) }
+  bin(x, nbins = 4, na.omit = F, labels = c("Bottom_25", "Q2", "Q3", "Top_25")) }
 
 doesnt.throw<- function(x){
-  x<-ifelse(is.na(x), "Does Not Throw", x)
+  x<-ifelse(is.na(x), "Does_Not_Throw", x)
 }
 
 df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
@@ -120,6 +120,14 @@ df$fastball_per_inning <- df$pitch_count_fastball / (df$IPouts/3)
 df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
 ```
 
+near zero variance variables that we can and should drop. We will keep 13, 14,18,28 
+```{r}
+colnames(df)[nearZeroVar(df)]
+nzv<-nearZeroVar(df)[-c(13,14,18,28,34,35,36)]
+colnames(df)[nzv]
+df<- df[, -nzv]
+
+```
 
 One hot encode the factors using recipe 
 
@@ -142,317 +150,20 @@ d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
 df.juice<-juice(d_prep)
 
 
-```
 
-
-SMOTE for class imbalance and test train split
-
-```{r}
-library(DMwR)
-library(caret)
-set.seed(23)
-train.indx <- createDataPartition(df.juice$TJ_Yes, p = .7, list = F)
-drop.vars<-c("Years.Between", "Repeat_Injury","TJ_No" )
-
-train.set<-data.frame(df.juice[train.indx, -which(names(df.juice) %in% drop.vars)])
-
-test.set<-data.frame(df.juice[-train.indx,-which(names(df.juice) %in% drop.vars)])
-
-
-y<-as.factor(test.set$TJ_Yes)
-test.set<- test.set %>%
-  select(-c("TJ_Yes"))
-
-#make factor
-train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
-
-
-#check balance 
-prop.table(table(train.set$TJ_Yes))
-prop.table(table(y))
-
-trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1500, perc.under = 150)
-
-prop.table(table(trainSplit$TJ_Yes))
-```
-
-Model fit basic logistic regression (code takes long to run did not execute)
-
-```{r eval=FALSE, include=TRUE}
-library(caret)
-
-levels(trainSplit$TJ_Yes) <- c("No", "Yes")
-levels(y) <- c("No", "Yes")
-
-ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
+write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData")
 
 ```
 
 
-RF
 
-```{r}
-library(ranger)
-##Define hypergrid
-hyper_grid <- expand.grid(
-  mtry = floor((383) * c(.05, .15, .25, .333, .4)),
-  min.node.size = c(1, 3, 5, 10), 
-  replace = c(TRUE, FALSE),                               
-  sample.fraction = c(.5, .75, 1)                                            
-)
 
-start_time <- Sys.time()
 
-##Full cartesian grid search
-for(i in seq_len(nrow(hyper_grid))) {
-  ##ith hyperparameter combination
-  fit <- ranger(
-    formula         = TJ_Yes ~ ., 
-    data            = trainSplit, 
-    num.trees       = 10*length(383),
-    mtry            = hyper_grid$mtry[i],
-    min.node.size   = hyper_grid$min.node.size[i],
-    replace         = hyper_grid$replace[i],
-    sample.fraction = hyper_grid$sample.fraction[i],
-    verbose         = TRUE,
-    seed            = 23,
-    respect.unordered.factors = 'order',
-    num.threads     = 3,
-    splitrule = "gini",
-    classification = T
-  )
-  ##Save OOB error 
-  hyper_grid$miss.class[i] <- fit$prediction.error
-}
 
-end_time <- Sys.time()
 
-##Time elapsed
-end_time - start_time
 
-hyper_grid %>%
-  arrange(miss.class) %>%
-  head(10)
 
-```
-```{r}
-opt.fit <- ranger(
-    formula         = TJ_Yes ~ ., 
-    data            = trainSplit, 
-    num.trees       = 10*length(383),
-    mtry            = 127,
-    min.node.size   = 5,
-    replace         = T,
-    sample.fraction = 0.5,
-    verbose         = TRUE,
-    seed            = 23,
-    respect.unordered.factors = 'order',
-    num.threads     = 3,
-    splitrule = "gini",
-    classification = T
-  )
-opt.fit$prediction.error
-opt.fit$confusion.matrix
 
-```
 
-```{r}
-opt.rf.pred = predict(opt.fit, test.set)
 
-confusionMatrix(opt.rf.pred$predictions, y)
-```
 
-
-XGB
-
-
-logistic with lasso penalty 
-
-```{r}
-library(glmnet)
-lambda <- seq(-3,3,25)
-set.seed(123) 
-
-y<- trainSplit$TJ_Yes
-
-x = model.matrix(TJ_Yes~., trainSplit)[,-1]
-
-cv.lasso <- cv.glmnet(x, trainSplit$TJ_Yes, alpha = 1, family = "binomial")
-
-plot(cv.lasso)
-
-```
-
-```{r}
-# Fit the final model on the training data
-lasso.logit <- glmnet(x, y, alpha = 1, family = "binomial",
-                lambda = cv.lasso$lambda.min)
-lasso.logit$beta
-
-
-x.test = model.matrix(TJ_Yes~., data.frame(df.juice[-train.indx,-which(names(df.juice) %in% drop.vars)]))[,-1]
-
-lasso.logit.pred <- predict(lasso.logit, x.test)
-
-predictions <- lasso.logit %>% predict(x.test) %>% as.vector()
-
-pred <- as.factor(ifelse(predictions>0,1,0))
-
-confusionMatrix(pred, y)
-
-length(pred)
-length(y)
-```
-
-```{r}
-
-
-logitmodel <- train(TJ_Yes ~ ., data = trainSplit, method = "glm",trControl = ctrl, family = "binomial")
-
-
-logitmodel
-
-confusionMatrix(logitmodel)
-
-train.pred<-predict(logitmodel, trainSplit)
-
-confusionMatrix(train.pred, trainSplit$TJ_Yes, positive = "Yes")
-
-preds.<-predict(logitmodel, test.set, type = "prob")
-
-preds<- ifelse( preds.$Yes > .999, "Yes", "No")
-
-levels(y)<- c("No", "Yes")
-
-confusionMatrix(as.factor(preds), y, positive = "Yes")
-
-levels(y)
-
-levels(preds)
-cutoffs <- seq(0.1,0.9,0.1)
-accuracy <- NULL
-for (i in seq(along = cutoffs)){
-prediction <- ifelse(logitmodel$finalModel$fitted.values >= cutoffs[i], 1, 0) 
-accuracy <- c(accuracy,length(which(y==prediction))/length(prediction)*100)
-}
-
-plot(cutoffs,accuracy)
-
-pred<-predict(logitmodel, test.set,)
-
-prop.table(table(pred))
-
-confusionMatrix(pred, y, positive = "Yes")
-
-```
-
-
-
-In order to avoid massive data loss, we need to bin and factorize some of the highly missing variables of interest like spin rate and velocity. For spin rate and velcoity, we use break into (top10%, top25% top50%, bottom25%, doesnt throw pitch).
-
-For break will split into quantiles 
-
-I used Uniform Manifold Approximation Projection to visualize data and reduce dimensions to asses clustering effect. 
-```{r}
-library(umap)
-
-
-df.map<-umap(df.juice[,-c(382:383)])
-umap.plot<-function(x, labels,
-          main="A UMAP visualization of the Tommy John dataset",
-          colors=c("grey", "red"),
-          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
-          cex.main=1, cex.legend=1) {
-         layout = x   
-         if (is(x, "umap")) {     layout = x$layout
-         } 
-   
-       xylim = range(layout)
-       xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
-      if (!add) {
-      par(mar=c(0.2,0.7,1.2,0.7), ps=10)
-     plot(xylim, xylim, type="n", axes=F, frame=F)
-     rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
-   }
-   points(layout[,1], layout[,2], col=colors[as.integer(labels)],
-          cex=cex, pch=pch)
-   mtext(side=3, main, cex=cex.main)
-
-   labels.u = unique(labels)
-   legend.pos = "topright"
-  legend.text = as.character(labels.u)
-   if (add) {
-     legend.pos = "bottomright"
-     legend.text = paste(as.character(labels.u), legend.suffix)
-   }
-   legend(legend.pos, legend=legend.text,
-          col=colors[as.integer(labels.u)],
-          bty="n", pch=pch, cex=cex.legend)
-}
-
-umap.plot(df.map,as.factor(df.juice$TJ_Yes))
-
-
-
-```
-
-UMAP IF I DROP ALL SABERMETRIC DATA 
-```{r}
-library(caret)
-library(umap)
-library(dplyr)
-library(recipes)
-
-df<-df1[ , colSums(is.na(df)) < 500]
-df<-df[, !sapply(df, is.character)]
-df<-na.omit(df)
-TJ<-df$TJ
-ind <- sapply(df, is.numeric)
-df[ind] <- lapply(df[ind], scale)
-
-#onehot factors
-rec = recipe( ~ ., data = df)
-rec_2 = rec %>% step_dummy(all_predictors(),-all_numeric(), one_hot = T)
-d_prep=rec_2 %>% prep(training = df, retain = T)
-
-df.juicel<-juice(d_prep)
-
-
-df.map<-umap(df.juicel[,-c(128:129)])
-umap.plot<-function(x, labels,
-          main="A UMAP visualization of the Tommy John dataset",
-          colors=c("grey", "red"),
-          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
-          cex.main=1, cex.legend=1) {
-         layout = x   
-         if (is(x, "umap")) {     layout = x$layout
-         } 
-   
-         xylim = range(layout)
-         xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
-         if (!add) {
-            par(mar=c(0.2,0.7,1.2,0.7), ps=10)
-            plot(xylim, xylim, type="n", axes=F, frame=F)
-            rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
-   }
-         points(layout[,1], layout[,2], col=colors[as.integer(labels)],
-          cex=cex, pch=pch)
-         mtext(side=3, main, cex=cex.main)
-
-         labels.u = unique(labels)
-         legend.pos = "topright"
-         legend.text = as.character(labels.u)
-   if (add) {
-     legend.pos = "bottomright"
-     legend.text = paste(as.character(labels.u), legend.suffix)
-   }
-   legend(legend.pos, legend=legend.text,
-          col=colors[as.integer(labels.u)],
-          bty="n", pch=pch, cex=cex.legend)
-}
-
-umap.plot(df.map,as.factor(df.juice$TJ_Yes))
-
-
-
-```
