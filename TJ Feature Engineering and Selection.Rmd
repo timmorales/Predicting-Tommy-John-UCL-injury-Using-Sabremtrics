@@ -12,7 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
+setwd("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/")
+df<-read.csv("Fully Joined Df.csv")
 ```
 
 Im going to drop a lot of the tommy john info as its either irrelevant or repeated elsewhere. 
@@ -35,7 +36,7 @@ df$made_postseason = as.factor(ifelse(is.na(df$post_IPouts),0,1))
 df[,c(162:186)][is.na(df[c(162:186)])] <- 0
 
 #Making a pitchs per game stat 
-df$pitches_per_ganes<- (df$pitch_count / df$p_game)
+df$pitches_per_game<- (df$pitch_count / df$p_game)
 
 #Percentages if NA set to 0 
 formatted.names<- c("n_ff_formatted","n_sl_formatted","n_ch_formatted","n_cukc_formatted","n_sift_formatted","n_fc_formatted","n_kn_formatted","n_fs_formatted", "n_fastball_formatted","n_breaking_formatted","n_offspeed_formatted")
@@ -106,6 +107,19 @@ df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
 
 ```
 
+Feature engineer making these per inning stats 
+
+```{r}
+df$pitch_per_out <- (df$pitch_count/ df$IPouts)
+df$innings_per_game <- (df$IPouts/ df$G.x)
+df$pitcher_per_BF <- df$pitch_count/ df$BFP
+df$batters_per_inning <- df$BFP / (df$IPouts/3)
+
+
+df$fastball_per_inning <- df$pitch_count_fastball / (df$IPouts/3)
+df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
+```
+
 
 One hot encode the factors using recipe 
 
@@ -138,11 +152,13 @@ library(DMwR)
 library(caret)
 set.seed(23)
 train.indx <- createDataPartition(df.juice$TJ_Yes, p = .7, list = F)
+drop.vars<-c("Years.Between", "Repeat_Injury","TJ_No" )
+
+train.set<-data.frame(df.juice[train.indx, -which(names(df.juice) %in% drop.vars)])
+
+test.set<-data.frame(df.juice[-train.indx,-which(names(df.juice) %in% drop.vars)])
 
 
-train.set<-data.frame(df.juice[train.indx,- c(101,102,382)])
-
-test.set<-data.frame(df.juice[-train.indx,- c(101,102,382)])
 y<-as.factor(test.set$TJ_Yes)
 test.set<- test.set %>%
   select(-c("TJ_Yes"))
@@ -166,6 +182,7 @@ Model fit basic logistic regression (code takes long to run did not execute)
 library(caret)
 
 levels(trainSplit$TJ_Yes) <- c("No", "Yes")
+levels(y) <- c("No", "Yes")
 
 ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
 
@@ -223,8 +240,8 @@ opt.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
     num.trees       = 10*length(383),
-    mtry            = 95,
-    min.node.size   = 1,
+    mtry            = 127,
+    min.node.size   = 5,
     replace         = T,
     sample.fraction = 0.5,
     verbose         = TRUE,
@@ -249,7 +266,43 @@ confusionMatrix(opt.rf.pred$predictions, y)
 XGB
 
 
-logistic 
+logistic with lasso penalty 
+
+```{r}
+library(glmnet)
+lambda <- seq(-3,3,25)
+set.seed(123) 
+
+y<- trainSplit$TJ_Yes
+
+x = model.matrix(TJ_Yes~., trainSplit)[,-1]
+
+cv.lasso <- cv.glmnet(x, trainSplit$TJ_Yes, alpha = 1, family = "binomial")
+
+plot(cv.lasso)
+
+```
+
+```{r}
+# Fit the final model on the training data
+lasso.logit <- glmnet(x, y, alpha = 1, family = "binomial",
+                lambda = cv.lasso$lambda.min)
+lasso.logit$beta
+
+
+x.test = model.matrix(TJ_Yes~., data.frame(df.juice[-train.indx,-which(names(df.juice) %in% drop.vars)]))[,-1]
+
+lasso.logit.pred <- predict(lasso.logit, x.test)
+
+predictions <- lasso.logit %>% predict(x.test) %>% as.vector()
+
+pred <- as.factor(ifelse(predictions>0,1,0))
+
+confusionMatrix(pred, y)
+
+length(pred)
+length(y)
+```
 
 ```{r}
 
