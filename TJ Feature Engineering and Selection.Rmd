@@ -394,9 +394,6 @@ umap.plot(df.map,as.factor(df.juice$TJ_Yes))
 
 
 
-
-
-
 ```
 
 UMAP IF I DROP ALL SABERMETRIC DATA 
