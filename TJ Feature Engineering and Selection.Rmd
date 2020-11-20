@@ -137,7 +137,7 @@ SMOTE for class imbalance and test train split
 library(DMwR)
 library(caret)
 set.seed(23)
-train.indx <- createDataPartition(df.juice$TJ_Yes, p = .8, list = F)
+train.indx <- createDataPartition(df.juice$TJ_Yes, p = .7, list = F)
 
 
 train.set<-data.frame(df.juice[train.indx,- c(101,102,382)])
@@ -155,7 +155,7 @@ train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
 prop.table(table(train.set$TJ_Yes))
 prop.table(table(y))
 
-trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 3000, perc.under = 1000)
+trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1500, perc.under = 150)
 
 prop.table(table(trainSplit$TJ_Yes))
 ```
@@ -168,6 +168,92 @@ library(caret)
 levels(trainSplit$TJ_Yes) <- c("No", "Yes")
 
 ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
+
+```
+
+
+RF
+
+```{r}
+library(ranger)
+##Define hypergrid
+hyper_grid <- expand.grid(
+  mtry = floor((383) * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .75, 1)                                            
+)
+
+start_time <- Sys.time()
+
+##Full cartesian grid search
+for(i in seq_len(nrow(hyper_grid))) {
+  ##ith hyperparameter combination
+  fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 10*length(383),
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T
+  )
+  ##Save OOB error 
+  hyper_grid$miss.class[i] <- fit$prediction.error
+}
+
+end_time <- Sys.time()
+
+##Time elapsed
+end_time - start_time
+
+hyper_grid %>%
+  arrange(miss.class) %>%
+  head(10)
+
+```
+```{r}
+opt.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 10*length(383),
+    mtry            = 95,
+    min.node.size   = 1,
+    replace         = T,
+    sample.fraction = 0.5,
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T
+  )
+opt.fit$prediction.error
+opt.fit$confusion.matrix
+
+```
+
+```{r}
+opt.rf.pred = predict(opt.fit, test.set)
+
+confusionMatrix(opt.rf.pred$predictions, y)
+```
+
+
+XGB
+
+
+logistic 
+
+```{r}
+
+
 logitmodel <- train(TJ_Yes ~ ., data = trainSplit, method = "glm",trControl = ctrl, family = "binomial")
 
 
