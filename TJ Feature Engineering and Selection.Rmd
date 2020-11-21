@@ -122,6 +122,7 @@ df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
 
 near zero variance variables that we can and should drop. We will keep 13, 14,18,28 
 ```{r}
+library(caret)
 colnames(df)[nearZeroVar(df)]
 nzv<-nearZeroVar(df)[-c(13,14,18,28,34,35,36)]
 colnames(df)[nzv]
@@ -149,9 +150,9 @@ d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
 
 df.juice<-juice(d_prep)
 
+df.juice[,c(89:340)]<- lapply(df.juice[,c(89:340)], as.factor)
 
-
-write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData")
+write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
 
 ```
 
