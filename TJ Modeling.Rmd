@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 setwd("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/")
 df<-read.csv("ModelReadyData.csv")
 df<- df[,-1]
+df[,c(89:340)]<- lapply(df[,c(89:340)], as.factor)
 ```
 
 SMOTE for class imbalance and test train split
@@ -35,7 +36,7 @@ test.set<-data.frame(df[-train.indx,-which(names(df) %in% drop.vars)])
 
 
 ```{r}
-
+write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
 y<-as.factor(test.set$TJ_Yes)
 test.set<- test.set %>%
   select(-c("TJ_Yes"))
@@ -58,14 +59,19 @@ trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 350)
 table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
+
+write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
+
+
 ```
 
 I used Uniform Manifold Approximation Projection to visualize data and reduce dimensions to asses clustering effect. 
 ```{r}
 library(umap)
 
+map.df<-sapply(trainSplit[,-333], as.numeric)
 
-df.map<-umap(trainSplit[,-c(333)])
+df.map<-umap(map.df)
 umap.plot<-function(x, labels,
           main="A UMAP visualization of the Tommy John dataset",
           colors=c("grey", "red"),
@@ -105,7 +111,9 @@ umap.plot(df.map,as.factor(trainSplit$TJ_Yes))
 UMAP IF I DONT USE SMOTE
 
 ```{r}
-df.map<-umap(train.set[,-c(333)])
+
+train.map.df<-sapply(train.set[,-333], as.numeric)
+df.map<-umap(train.map.df[,-c(333)])
 
 umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
@@ -115,7 +123,9 @@ umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
 Test set UMAP
 ```{r}
-df_test_map<-umap(test.set)
+
+test.map.df<-sapply(test.set, as.numeric)
+df.map<-umap(test.map.df)
 
 umap.plot(df.map,as.factor(y))
 
