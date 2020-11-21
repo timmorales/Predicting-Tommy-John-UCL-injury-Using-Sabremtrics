@@ -46,9 +46,16 @@ train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
 
 #check balance 
 prop.table(table(train.set$TJ_Yes))
-prop.table(table(y))
+table(train.set$TJ_Yes)
 
-trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1500, perc.under = 200)
+trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 350)
+
+#perc over /100 is how many times u randomly sample minority 
+#perc under/ 100 is ratio of majority to minority you allow 
+
+#i select this because it is just like oversampling the majority and leaving minority
+
+table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
 ```
@@ -98,7 +105,6 @@ umap.plot(df.map,as.factor(trainSplit$TJ_Yes))
 UMAP IF I DONT USE SMOTE
 
 ```{r}
-
 df.map<-umap(train.set[,-c(333)])
 
 umap.plot(df.map,as.factor(train.set$TJ_Yes))
@@ -109,62 +115,78 @@ umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
 Test set UMAP
 ```{r}
-df_test_map<-umap(test.set[,-c(334)])
+df_test_map<-umap(test.set)
 
 umap.plot(df.map,as.factor(y))
 
 
 ```
 
+The interesting take away from UMAP is that when we use SMOTE, we see to lose the overarching structure in the data. This can be seen in how the train and test splits both have similar structure but the UMAP is different for the SMOTE. 
 
-Model fit basic logistic regression (code takes long to run did not execute)
+This is raises concerns about the functionality of smote in this dataset. 
 
-```{r eval=FALSE, include=TRUE}
-library(caret)
+
+
+
+
+```{r}
 
 levels(trainSplit$TJ_Yes) <- c("No", "Yes")
 levels(y) <- c("No", "Yes")
 
-ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
-
 ```
 
 
-RF
+# RF Optimization W SMOTE
+
 
 ```{r}
 library(ranger)
 ##Define hypergrid
 hyper_grid <- expand.grid(
-  mtry = floor((383) * c(.05, .15, .25, .333, .4)),
+  mtry = floor((337) * c(.05, .15, .25, .333, .4)),
   min.node.size = c(1, 3, 5, 10), 
   replace = c(TRUE, FALSE),                               
-  sample.fraction = c(.5, .75, 1)                                            
+  sample.fraction = c(.5, .75, 1),
+  cutoff = c(0.05, 0.07, 0.10,0.15, 0.5)
 )
+cuts = c(0.10, 0.15, 0.3, 0.4, 0.5)
 
-start_time <- Sys.time()
+
+end<-nrow(hyper_grid)
+
+
+loop<-seq(1,end,5)
 
 ##Full cartesian grid search
-for(i in seq_len(nrow(hyper_grid))) {
+for(i in loop) {
   ##ith hyperparameter combination
   fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = 10*length(383),
+    num.trees       = (337),
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$min.node.size[i],
     replace         = hyper_grid$replace[i],
     sample.fraction = hyper_grid$sample.fraction[i],
-    verbose         = TRUE,
+    verbose         = F,
     seed            = 23,
-    respect.unordered.factors = 'order',
+    respect.unordered.factors = FALSE,
     num.threads     = 3,
     splitrule = "gini",
-    classification = T
+    classification = T,
+    probability = T
   )
-  ##Save OOB error 
-  fit.pred <- fit$predictions
-  hyper_grid$sens[i] <- sensitivity(fit.pred, trainSplit$TJ_Yes, positive = "1")
+    for (j in 1:length(cuts)){
+    hyper_grid$cutoff[i+j-1]<- cuts[j]
+    fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+  #making my own F1 score type but giving more weight to recall
+  # i want a balance between recall and postive pred value
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i]) + hyper_grid$NPV[i]
+    }
 }
 
 end_time <- Sys.time()
@@ -172,44 +194,352 @@ end_time <- Sys.time()
 ##Time elapsed
 end_time - start_time
 
-hyper_grid %>%
-  arrange(desc(sens)) %>%
+NPV_grid <- hyper_grid %>%
+  arrange(desc(NPV),desc(Score),desc(sens)) %>%
   head(10)
 
 
-
+head(NPV_grid)
 ```
 
+## Optimized on NPV 
 
 ```{r}
 opt.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = 10*length(383),
-    mtry            = 127,
-    min.node.size   = 5,
-    replace         = T,
-    sample.fraction = 0.75,
+    num.trees       = (337),
+    mtry            = NPV_grid$mtry[1],
+    min.node.size   = NPV_grid$min.node.size[1],
+    replace         = NPV_grid$replace[1],
+    sample.fraction = NPV_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+train.pred.rf<- as.factor(ifelse(opt.fit$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(train.pred.rf, trainSplit$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on NPV
+
+```{r}
+opt.rf.pred = predict(opt.fit, test.set)
+
+classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(classification.pred.rf, y)
+
+```
+
+## Optimized on Recall 
+
+```{r}
+recall_grid<-hyper_grid %>%
+  arrange(desc(sens),desc(Score), desc(NPV)) %>%
+  head(10)
+
+head(recall_grid)
+```
+
+```{r}
+recall.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 4000,
+    mtry            = recall_grid$mtry[1],
+    min.node.size   = recall_grid$min.node.size[1],
+    replace         = recall_grid$replace[1],
+    sample.fraction = recall_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.rf, trainSplit$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on Recall
+
+```{r}
+opt.recall = predict(recall.fit, test.set)
+
+recall.pred.rf<- as.factor(ifelse(opt.recall$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.pred.rf, y)
+
+```
+
+
+## Optimized on my custom score 
+
+```{r}
+
+score_grid<-hyper_grid %>%
+  arrange(desc(Score), desc(sens), desc(NPV)) %>%
+  head(10)
+
+head(score_grid)
+```
+
+```{r}
+score.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 10*337,
+    mtry            = score_grid$mtry[1],
+    min.node.size   = score_grid$min.node.size[1],
+    replace         = score_grid$replace[1],
+    sample.fraction = score_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors =FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+score.rf<- as.factor(ifelse(score.fit$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.rf, trainSplit$TJ_Yes)
+
+```
+
+### Testset results with custom score 
+
+```{r}
+opt.score = predict(opt.fit, test.set)
+
+score.pred.rf<- as.factor(ifelse(opt.score$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.pred.rf, y)
+
+```
+
+
+
+# RF Optimizied Just Train Set
+
+```{r eval=FALSE, include=TRUE}
+
+levels(train.set$TJ_Yes) <- c("No", "Yes")
+levels(y) <- c("No", "Yes")
+
+```
+
+
+
+```{r}
+library(ranger)
+##Define hypergrid
+hyper_grid <- expand.grid(
+  mtry = floor((337) * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .75, 1),
+  cutoff = c(0.05, 0.07, 0.10,0.15, 0.5)
+)
+cuts = c(0.10, 0.15, 0.3, 0.4, 0.5)
+
+
+end<-nrow(hyper_grid)
+
+loop<-seq(1,end,5)
+
+##Full cartesian grid search
+for(i in loop) {
+  ##ith hyperparameter combination
+  fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = (337),
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = F,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+    for (j in 1:length(cuts)){
+    hyper_grid$cutoff[i+j-1]<- cuts[j]
+    fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+  #making my own F1 score type but giving more weight to recall
+  # i want a balance between recall and postive pred value
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i]) + hyper_grid$NPV[i]
+    }
+}
+
+end_time <- Sys.time()
+
+##Time elapsed
+end_time - start_time
+
+NPV_grid <- hyper_grid %>%
+  arrange(desc(NPV),desc(Score),desc(sens)) %>%
+  head(10)
+
+
+head(NPV_grid)
+```
+
+## Optimized on NPV 
+
+```{r}
+opt.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 10*length(337),
+    mtry            = NPV_grid$mtry[1],
+    min.node.size   = NPV_grid$min.node.size[1],
+    replace         = NPV_grid$replace[1],
+    sample.fraction = NPV_grid$sample.fraction[1],
     verbose         = TRUE,
     seed            = 23,
     respect.unordered.factors = 'order',
     num.threads     = 3,
     splitrule = "gini",
-    classification = T
+    classification = T,
+    probability = T
   )
 
-opt.fit$confusion.matrix
+
+
+train.pred.rf<- as.factor(ifelse(opt.fit$predictions[,2] > NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(train.pred.rf, train.set$TJ_Yes)
 
 ```
+
+### Test Set Results Optimized on NPV
 
 ```{r}
 opt.rf.pred = predict(opt.fit, test.set)
 
-classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>.,1,0))
-
-
+classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
 confusionMatrix(classification.pred.rf, y)
+
 ```
+
+## Optimized on Recall 
+
+```{r}
+
+recall_grid <- hyper_grid%>%
+  arrange(desc(sens)) %>%
+  head(10)
+
+head(recall_grid)
+```
+
+```{r}
+recall.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 10*length(337),
+    mtry            = recall_grid$mtry[1],
+    min.node.size   = recall_grid$min.node.size[1],
+    replace         = recall_grid$replace[1],
+    sample.fraction = recall_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.rf, train.set$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on Recall
+
+```{r}
+opt.recall = predict(recall.fit, test.set)
+
+recall.pred.rf<- as.factor(ifelse(opt.recall$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.pred.rf, y)
+
+```
+
+
+## Optimized on my custom score 
+
+```{r}
+
+score_grid<-hyper_grid %>%
+  arrange(desc(Score)) %>%
+  head(10)
+
+head(score_grid)
+```
+
+```{r}
+score.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 10*length(337),
+    mtry            = score_grid$mtry[1],
+    min.node.size   = score_grid$min.node.size[1],
+    replace         = score_grid$replace[1],
+    sample.fraction = score_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+score.rf<- as.factor(ifelse(score.fit$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.rf, train.set$TJ_Yes)
+
+```
+
+### Testset results with custom score 
+
+```{r}
+opt.score = predict(opt.fit, test.set)
+
+score.pred.rf<- as.factor(ifelse(opt.score$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.pred.rf, y)
+
+```
+
+
+
+
+
+
+
+
+
+
 
 
 XGB
@@ -219,6 +549,8 @@ logistic with lasso penalty
 
 ```{r}
 library(glmnet)
+
+ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
 lambda <- seq(-3,3,25)
 set.seed(123) 
 
@@ -294,6 +626,7 @@ prop.table(table(pred))
 confusionMatrix(pred, y, positive = "Yes")
 
 ```
+
 
 
 
