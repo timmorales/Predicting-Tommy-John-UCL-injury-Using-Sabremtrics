@@ -755,7 +755,7 @@ ggplot(recall.imp.df[1:20,], aes(x=reorder(variable,importance), y=importance,fi
       xlab("")+
       ggtitle("Information Value Summary")+
       guides(fill=F)+
-      scale_fill_gradient(low="grey", high="red")
+      scale_fill_gradient(low="tan", high="red")
 
 ```
 ## Optimized on my custom score 
