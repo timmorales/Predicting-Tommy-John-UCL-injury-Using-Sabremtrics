@@ -590,7 +590,232 @@ confusionMatrix(as.factor(preds), y, positive = "Yes")
 
 ```
 
+What If We Use Variables Relating to only the pitcher.
+
+```{r}
+index<-c(8:19,22,27,30:35,37:40,80)
+batter_dependent <- colnames(trainSplit[,c(8:19,22,27,30:35,37:40,80)])
+trainSplit.2 <- trainSplit[,-index]
+levels(trainSplit.2$TJ_Yes) <- c("No", "Yes")
+test.set.2 <- test.set[,-index]
 
 
 
+```
+
+```{r}
+library(ranger)
+##Define hypergrid
+hyper_grid <- expand.grid(
+  mtry = floor((337) * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .75, 1),
+  cutoff = c(0.05, 0.07, 0.10,0.15, 0.5)
+)
+cuts = c(0.10, 0.15, 0.3, 0.4, 0.5)
+
+
+end<-nrow(hyper_grid)
+
+
+loop<-seq(1,end,5)
+
+##Full cartesian grid search
+for(i in loop) {
+  ##ith hyperparameter combination
+  fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit.2, 
+    num.trees       = (3110),
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = F,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+    for (j in 1:length(cuts)){
+    hyper_grid$cutoff[i+j-1]<- cuts[j]
+    fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, trainSplit.2$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit.2$TJ_Yes, positive = "Yes")
+  #making my own F1 score type but giving more weight to recall
+  # i want a balance between recall and postive pred value
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i+j-1]) + hyper_grid$NPV[i+j-1]
+    }
+}
+
+
+NPV_grid <- hyper_grid %>%
+  arrange(desc(NPV),desc(Score),desc(sens)) %>%
+  head(10)
+
+
+head(NPV_grid)
+```
+
+## Optimized on NPV 
+
+```{r}
+opt.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit.2, 
+    num.trees       = 4000,
+    mtry            = NPV_grid$mtry[1],
+    min.node.size   = NPV_grid$min.node.size[1],
+    replace         = NPV_grid$replace[1],
+    sample.fraction = NPV_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+train.pred.rf<- as.factor(ifelse(opt.fit$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(train.pred.rf, trainSplit.2$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on NPV
+
+```{r}
+opt.rf.pred = predict(opt.fit, test.set)
+
+classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(classification.pred.rf, y)
+
+```
+
+
+## Optimized on Recall 
+
+```{r}
+
+recall_grid <- hyper_grid%>%
+  arrange(desc(sens)) %>%
+  head(10)
+
+head(recall_grid)
+```
+
+```{r}
+recall.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit.2, 
+    num.trees       = 4000,
+    mtry            = recall_grid$mtry[1],
+    min.node.size   = recall_grid$min.node.size[1],
+    replace         = recall_grid$replace[1],
+    sample.fraction = recall_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = F,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T,
+    importance = "impurity"
+  )
+
+
+
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.rf, trainSplit.2$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on Recall
+
+```{r}
+opt.recall = predict(recall.fit, test.set)
+
+recall.pred.rf<- as.factor(ifelse(opt.recall$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.pred.rf, y)
+
+```
+
+```{r}
+varimp.recall <- recall.fit$variable.importance
+recall.imp.df<- data.frame(variable = names(varimp.recall), importance = varimp.recall)
+recall.imp.df <- recall.imp.df %>% 
+  arrange(desc(importance))
+
+ggplot(recall.imp.df[1:20,], aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="grey", high="red")
+
+```
+## Optimized on my custom score 
+
+```{r}
+
+score_grid<-hyper_grid %>%
+  arrange(desc(Score)) %>%
+  head(10)
+
+head(score_grid)
+```
+
+```{r}
+score.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit.2, 
+    num.trees       = 4000,
+    mtry            = score_grid$mtry[1],
+    min.node.size   = score_grid$min.node.size[1],
+    replace         = score_grid$replace[1],
+    sample.fraction = score_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = F,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T, 
+    importance = "impurity"
+  )
+
+
+score.rf<- as.factor(ifelse(score.fit$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.rf, trainSplit.2$TJ_Yes)
+
+```
+
+### Testset results with custom score 
+
+```{r}
+opt.score = predict(opt.fit, test.set)
+
+score.pred.rf<- as.factor(ifelse(opt.score$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.pred.rf, y)
+
+```
+```{r}
+varimp.score <- score.fit$variable.importance
+score.imp.df<- data.frame(variable = names(varimp.score), importance = varimp.score)
+score.imp.df <- recall.imp.df %>% 
+  arrange(desc(importance))
+
+ggplot(score.imp.df[1:20,], aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="tan", high="red")
+
+```
 
