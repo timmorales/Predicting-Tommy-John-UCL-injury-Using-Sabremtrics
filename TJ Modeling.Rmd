@@ -14,6 +14,7 @@ setwd("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/")
 df<-read.csv("ModelReadyData.csv")
 df<- df[,-1]
 df[,c(89:340)]<- lapply(df[,c(89:340)], as.factor)
+
 ```
 
 SMOTE for class imbalance and test train split
@@ -36,7 +37,7 @@ test.set<-data.frame(df[-train.indx,-which(names(df) %in% drop.vars)])
 
 
 ```{r}
-write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
+# write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
 y<-as.factor(test.set$TJ_Yes)
 test.set<- test.set %>%
   select(-c("TJ_Yes"))
@@ -59,8 +60,8 @@ trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 350)
 table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
-
-write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
+# 
+# write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
 
 
 ```
@@ -68,8 +69,9 @@ write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Dat
 I used Uniform Manifold Approximation Projection to visualize data and reduce dimensions to asses clustering effect. 
 ```{r}
 library(umap)
-
-map.df<-sapply(trainSplit[,-333], as.numeric)
+as.numeric.factor <- function(x) {as.numeric(levels(x))[x]}
+map.df <- trainSplit[,-333]
+map.df[,87:336]<-lapply(trainSplit[,87:336], as.numeric.factor)
 
 df.map<-umap(map.df)
 umap.plot<-function(x, labels,
@@ -111,9 +113,10 @@ umap.plot(df.map,as.factor(trainSplit$TJ_Yes))
 UMAP IF I DONT USE SMOTE
 
 ```{r}
+train.map.df <- train.set[,-333]
+train.map.df[,87:336]<-lapply(train.set[,87:336], as.numeric.factor)
 
-train.map.df<-sapply(train.set[,-333], as.numeric)
-df.map<-umap(train.map.df[,-c(333)])
+df.map<-umap(train.map.df)
 
 umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
@@ -123,12 +126,11 @@ umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
 Test set UMAP
 ```{r}
-
-test.map.df<-sapply(test.set, as.numeric)
+test.map.df<-test.set
+test.map.df[,87:336]<-lapply(test.set[,87:336], as.numeric.factor)
 df.map<-umap(test.map.df)
 
 umap.plot(df.map,as.factor(y))
-
 
 ```
 
@@ -175,7 +177,7 @@ for(i in loop) {
   fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = (337),
+    num.trees       = (3370),
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$min.node.size[i],
     replace         = hyper_grid$replace[i],
@@ -195,14 +197,10 @@ for(i in loop) {
     hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
   #making my own F1 score type but giving more weight to recall
   # i want a balance between recall and postive pred value
-  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i]) + hyper_grid$NPV[i]
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i+j-1]) + hyper_grid$NPV[i+j-1]
     }
 }
 
-end_time <- Sys.time()
-
-##Time elapsed
-end_time - start_time
 
 NPV_grid <- hyper_grid %>%
   arrange(desc(NPV),desc(Score),desc(sens)) %>%
@@ -218,7 +216,7 @@ head(NPV_grid)
 opt.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = (337),
+    num.trees       = 4000,
     mtry            = NPV_grid$mtry[1],
     min.node.size   = NPV_grid$min.node.size[1],
     replace         = NPV_grid$replace[1],
@@ -277,7 +275,7 @@ recall.fit <- ranger(
 
 
 
-recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[2],"Yes","No"))
 confusionMatrix(recall.rf, trainSplit$TJ_Yes)
 
 ```
@@ -308,7 +306,7 @@ head(score_grid)
 score.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = 10*337,
+    num.trees       = 4000,
     mtry            = score_grid$mtry[1],
     min.node.size   = score_grid$min.node.size[1],
     replace         = score_grid$replace[1],
@@ -343,7 +341,7 @@ confusionMatrix(score.pred.rf, y)
 
 # RF Optimizied Just Train Set
 
-```{r eval=FALSE, include=TRUE}
+```{r}
 
 levels(train.set$TJ_Yes) <- c("No", "Yes")
 levels(y) <- c("No", "Yes")
@@ -375,7 +373,7 @@ for(i in loop) {
   fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = train.set, 
-    num.trees       = (337),
+    num.trees       = (3370),
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$min.node.size[i],
     replace         = hyper_grid$replace[i],
@@ -391,18 +389,15 @@ for(i in loop) {
     for (j in 1:length(cuts)){
     hyper_grid$cutoff[i+j-1]<- cuts[j]
     fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
-    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
-    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, train.set$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, train.set$TJ_Yes, positive = "Yes")
   #making my own F1 score type but giving more weight to recall
   # i want a balance between recall and postive pred value
-  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i]) + hyper_grid$NPV[i]
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i+j-1]) + hyper_grid$NPV[i+j-1]
     }
 }
 
-end_time <- Sys.time()
 
-##Time elapsed
-end_time - start_time
 
 NPV_grid <- hyper_grid %>%
   arrange(desc(NPV),desc(Score),desc(sens)) %>%
@@ -418,14 +413,14 @@ head(NPV_grid)
 opt.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = train.set, 
-    num.trees       = 10*length(337),
+    num.trees       = 4000,
     mtry            = NPV_grid$mtry[1],
     min.node.size   = NPV_grid$min.node.size[1],
     replace         = NPV_grid$replace[1],
     sample.fraction = NPV_grid$sample.fraction[1],
     verbose         = TRUE,
     seed            = 23,
-    respect.unordered.factors = 'order',
+    respect.unordered.factors = F,
     num.threads     = 3,
     splitrule = "gini",
     classification = T,
@@ -464,14 +459,14 @@ head(recall_grid)
 recall.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = train.set, 
-    num.trees       = 10*length(337),
+    num.trees       = 4000,
     mtry            = recall_grid$mtry[1],
     min.node.size   = recall_grid$min.node.size[1],
     replace         = recall_grid$replace[1],
     sample.fraction = recall_grid$sample.fraction[1],
     verbose         = TRUE,
     seed            = 23,
-    respect.unordered.factors = 'order',
+    respect.unordered.factors = F,
     num.threads     = 3,
     splitrule = "gini",
     classification = T,
@@ -511,14 +506,14 @@ head(score_grid)
 score.fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = train.set, 
-    num.trees       = 10*length(337),
+    num.trees       = 4000,
     mtry            = score_grid$mtry[1],
     min.node.size   = score_grid$min.node.size[1],
     replace         = score_grid$replace[1],
     sample.fraction = score_grid$sample.fraction[1],
     verbose         = TRUE,
     seed            = 23,
-    respect.unordered.factors = 'order',
+    respect.unordered.factors = F,
     num.threads     = 3,
     splitrule = "gini",
     classification = T,
@@ -555,85 +550,43 @@ confusionMatrix(score.pred.rf, y)
 XGB
 
 
-logistic with lasso penalty 
+logistic reg
 
 ```{r}
 library(glmnet)
-
-ctrl <- trainControl(method="repeatedcv", number=10, repeats=2, classProbs = T)
-lambda <- seq(-3,3,25)
-set.seed(123) 
-
-y<- trainSplit$TJ_Yes
-
-x = model.matrix(TJ_Yes~., trainSplit)[,-1]
-
-cv.lasso <- cv.glmnet(x, trainSplit$TJ_Yes, alpha = 1, family = "binomial")
-
-plot(cv.lasso)
-
-```
-
-```{r}
-# Fit the final model on the training data
-lasso.logit <- glmnet(x, y, alpha = 1, family = "binomial",
-                lambda = cv.lasso$lambda.min)
-lasso.logit$beta
+ctrl <- trainControl(method="cv", number=10, classProbs = T)
+set.seed(23) 
+#making logit df
+logit.trainsplit <- trainSplit
 
 
-x.test = model.matrix(TJ_Yes~., data.frame(df.juice[-train.indx,-which(names(df.juice) %in% drop.vars)]))[,-1]
+logit.trainsplit[,c(87:332,334:337)] <- lapply(logit.trainsplit[,c(87:332,334:337)], as.numeric)
 
-lasso.logit.pred <- predict(lasso.logit, x.test)
-
-predictions <- lasso.logit %>% predict(x.test) %>% as.vector()
-
-pred <- as.factor(ifelse(predictions>0,1,0))
-
-confusionMatrix(pred, y)
-
-length(pred)
-length(y)
-```
-
-```{r}
+logit.test <- test.set
+logit.test[,c(87:336)] <- lapply(logit.test[,c(87:336)], as.numeric.factor )
 
 
-logitmodel <- train(TJ_Yes ~ ., data = trainSplit, method = "glm",trControl = ctrl, family = "binomial")
+
+#running basic logit 
+logitmodel <- train(TJ_Yes ~., data = logit.trainsplit, method = "glm", trControl = ctrl, family = "binomial")
 
 
 logitmodel
 
 confusionMatrix(logitmodel)
 
-train.pred<-predict(logitmodel, trainSplit)
+train.pred<-predict(logitmodel, logit.trainsplit)
 
 confusionMatrix(train.pred, trainSplit$TJ_Yes, positive = "Yes")
 
-preds.<-predict(logitmodel, test.set, type = "prob")
+preds<-predict(logitmodel, logit.test, prob = T)
 
-preds<- ifelse( preds.$Yes > .999, "Yes", "No")
-
-levels(y)<- c("No", "Yes")
-
-confusionMatrix(as.factor(preds), y, positive = "Yes")
+preds<- ifelse(preds.$Yes > .99, "Yes", "No")
 
 levels(y)
+levels(y) <- c("No", "Yes")
+confusionMatrix(as.factor(preds), y, positive = "Yes")
 
-levels(preds)
-cutoffs <- seq(0.1,0.9,0.1)
-accuracy <- NULL
-for (i in seq(along = cutoffs)){
-prediction <- ifelse(logitmodel$finalModel$fitted.values >= cutoffs[i], 1, 0) 
-accuracy <- c(accuracy,length(which(y==prediction))/length(prediction)*100)
-}
-
-plot(cutoffs,accuracy)
-
-pred<-predict(logitmodel, test.set,)
-
-prop.table(table(pred))
-
-confusionMatrix(pred, y, positive = "Yes")
 
 ```
 
