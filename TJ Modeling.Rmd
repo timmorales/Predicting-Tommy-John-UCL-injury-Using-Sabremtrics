@@ -816,6 +816,5 @@ ggplot(score.imp.df[1:20,], aes(x=reorder(variable,importance), y=importance,fil
       ggtitle("Information Value Summary")+
       guides(fill=F)+
       scale_fill_gradient(low="tan", high="red")
-
 ```
 
