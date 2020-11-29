@@ -21,6 +21,7 @@ Im going to drop a lot of the tommy john info as its either irrelevant or repeat
 Dropping and Flagging Variables 
 ```{r}
 ## removing random surgery information 
+colnames(df[, c(185:228)])
 df<-df[, -c(185:228)]
 
 # make yearID and TJ a factor
@@ -33,6 +34,7 @@ levels(df$TJ) = c("No", "Yes")
 df$made_postseason = as.factor(ifelse(is.na(df$post_IPouts),0,1))
 
 #i can fill playoff NAs with 0 
+#colnames(df[,c(162:186)])
 df[,c(162:186)][is.na(df[c(162:186)])] <- 0
 
 #Making a pitchs per game stat 
@@ -67,8 +69,6 @@ df$warm_birth_place <- as.factor(ifelse(df$birthCountry %notin% outsideUSCold,1,
 library(tidyverse)
 library(lubridate)
 #drop the 1 missing player nameFirst
-#which(is.na(df$nameFirst.x))
-df<-df[-3581,]
 ### check miss to be fixed 
 # colSums(is.na(df))
 #i drop the below columns because theyre either not usefully or impossible to impute
@@ -93,14 +93,14 @@ col.w.na = colSums(is.na(df)) > 0
 library(OneR)
 
 col.w.na.names<-colnames(df)[col.w.na]
-# col.w.na.names
+#col.w.na.names
 
 #i make the function i want 
 bin.omit.false<- function(x){
   bin(x, nbins = 4, na.omit = F, labels = c("Bottom_25", "Q2", "Q3", "Top_25")) }
 
 doesnt.throw<- function(x){
-  x<-ifelse(is.na(x), "Does_Not_Throw", x)
+  x<-ifelse(is.na(x)==T, "Does_Not_Throw", x)
 }
 
 df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
@@ -120,37 +120,42 @@ df$fastball_per_inning <- df$pitch_count_fastball / (df$IPouts/3)
 df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
 ```
 
-near zero variance variables that we can and should drop. We will keep 13, 14,18,28 
+We remove nearzero variane variables unless they are related to previous research like IP or BFP
+
 ```{r}
 library(caret)
-colnames(df)[nearZeroVar(df)]
-nzv<-nearZeroVar(df)[-c(13,14,18,28,34,35,36)]
+nzv <- nearZeroVar(df)
+
 colnames(df)[nzv]
-df<- df[, -nzv]
+
+nzv.final <- nzv[-c(11,14,15,25,33)]
+
+df<- df[,-nzv.final]
 
 ```
+
+
 
 One hot encode the factors using recipe 
 
 ```{r}
+
 # Drop identifying character variables 
-
-library(recipes)
-
 df.onehot <- df %>%
   select(- c("nameLast.x", "nameFirst.x", "PlayerName", "playerID", "teamID", "retroID", "bbrefID"))
 
 
 
+
+library(recipes)
 rec = recipe( ~ ., data = df.onehot)
 rec_2 = rec %>% 
-  step_normalize(all_predictors(),-all_nominal())%>%
   step_dummy(all_predictors(),-all_numeric(), one_hot = T)
 d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
 
 df.juice<-juice(d_prep)
 
-df.juice[,c(89:340)]<- lapply(df.juice[,c(89:340)], as.factor)
+
 
 write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
 

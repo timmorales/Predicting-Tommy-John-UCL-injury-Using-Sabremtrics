@@ -34,10 +34,11 @@ table(mlb_only_tj_list$Level)
 
 
 #create a variable to denote the last year before their surgery 
-#if they got surgery after august or during august in that year
+#if they got surgery after or during aril  in that year
 # we can use the same season. 
-#if before august, we use year prior.
-mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Mon >= 8, mlb_only_tj_list$Year,mlb_only_tj_list$Year - 1) 
+#if before april, we use year prior.
+
+mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Mon >= 3, mlb_only_tj_list$Year,mlb_only_tj_list$Year - 1) 
 
 
 #if surgery done in 2020, auto use 2019
@@ -263,62 +264,24 @@ df.total<-left_join(df.plus.post, tj.list.Id, by = c( "bbrefID", "yearID"))
 #create the flag 
 df.total$TJ<-ifelse(is.na(df.total$TJ), 0, 1)
 
-
-## write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
 ```
 
 
-
-
+We will require that they face at least 30 batters in that season, going off of michigan papers' 10 innings. 
 
 ```{r}
-library(caret)
-library(umap)
-library(dplyr)
 
+injured <- subset(df.total, df.total$TJ == 1)
+which(injured$BFP<30)
+injured$PlayerName[which(injured$BFP<30)]
 
-df<-df.total[ , colSums(is.na(df.total)) < 500]
-df<-dplyr::select_if(df, is.numeric)
-df<-na.omit(df)
-df.scaled <- as.data.frame(scale(df[,-c(92)]))
-df.scaled$TJ<-df$TJ
+#keep only those with more than 30 batters faced 
+df.total <- subset(df.total, df.total$BFP >= 30)
 
-df.map<-umap(df.scaled[,-c(92)])
-umap.plot<-function(x, labels,
-          main="A UMAP visualization of the Tommy John dataset",
-          colors=c("grey", "red"),
-          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
-          cex.main=1, cex.legend=1) {
-    layout = x   
-    if (is(x, "umap")) {     layout = x$layout
-   } 
-   
-   xylim = range(layout)
-   xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
-   if (!add) {
-     par(mar=c(0.2,0.7,1.2,0.7), ps=10)
-     plot(xylim, xylim, type="n", axes=F, frame=F)
-     rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
-   }
-   points(layout[,1], layout[,2], col=colors[as.integer(labels)],
-          cex=cex, pch=pch)
-   mtext(side=3, main, cex=cex.main)
-
-   labels.u = unique(labels)
-   legend.pos = "topright"
-  legend.text = as.character(labels.u)
-   if (add) {
-     legend.pos = "bottomright"
-     legend.text = paste(as.character(labels.u), legend.suffix)
-   }
-   legend(legend.pos, legend=legend.text,
-          col=colors[as.integer(labels.u)],
-          bty="n", pch=pch, cex=cex.legend)
-}
-df.scaled$TJ<-as.factor(df.scaled$TJ)
-levels(df.scaled$TJ)= c("No", "Yes")
-umap.plot(df.map,df.scaled$TJ)
+write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
 ```
+
+Lets make sure this dataframe works and make sense 
 
 
 
