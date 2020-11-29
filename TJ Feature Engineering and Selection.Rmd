@@ -12,8 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-setwd("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/")
-df<-read.csv("Fully Joined Df.csv")
+
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
 ```
 
 Im going to drop a lot of the tommy john info as its either irrelevant or repeated elsewhere. 
@@ -156,8 +156,8 @@ d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
 df.juice<-juice(d_prep)
 
 
-
-write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
+# 
+# write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
 
 ```
 

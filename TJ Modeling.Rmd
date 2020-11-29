@@ -10,16 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-setwd("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/")
-df<-read.csv("ModelReadyData.csv")
+
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
 df<- df[,-1]
-df[,c(89:340)]<- lapply(df[,c(89:340)], as.factor)
 
-```
-
-SMOTE for class imbalance and test train split
-
-```{r}
+#train test split
 library(DMwR)
 library(caret)
 library(umap)
@@ -33,11 +28,23 @@ drop.vars<-c("Years.Between", "Repeat_Injury","TJ_No" )
 train.set<-data.frame(df[train.indx, -which(names(df) %in% drop.vars)])
 
 test.set<-data.frame(df[-train.indx,-which(names(df) %in% drop.vars)])
+
+#center and scale numerics
+train.set[,c(1:90)]<- lapply(train.set[,c(1:90)], scale)
+
+#center and scale numerics
+test.set[,c(1:90)]<- lapply(test.set[,c(1:90)], scale)
+
 ```
+
 
 
 ```{r}
 # write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
+# 
+# write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
+
+#set y and remove from test set
 y<-as.factor(test.set$TJ_Yes)
 test.set<- test.set %>%
   select(-c("TJ_Yes"))
@@ -50,6 +57,9 @@ train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
 prop.table(table(train.set$TJ_Yes))
 table(train.set$TJ_Yes)
 
+#make factor before i SMOTE 
+train.set[,c(91:336)]<- lapply(train.set[,c(91:336)], as.factor)
+set.seed(23)
 trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 350)
 
 #perc over /100 is how many times u randomly sample minority 
@@ -60,7 +70,7 @@ trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 350)
 table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
-# 
+
 # write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
 
 
@@ -70,8 +80,8 @@ I used Uniform Manifold Approximation Projection to visualize data and reduce di
 ```{r}
 library(umap)
 as.numeric.factor <- function(x) {as.numeric(levels(x))[x]}
-map.df <- trainSplit[,-333]
-map.df[,87:336]<-lapply(trainSplit[,87:336], as.numeric.factor)
+map.df <- trainSplit[,-332]
+map.df[,91:335]<-lapply(trainSplit[,91:335], as.numeric.factor)
 
 df.map<-umap(map.df)
 umap.plot<-function(x, labels,
@@ -113,8 +123,8 @@ umap.plot(df.map,as.factor(trainSplit$TJ_Yes))
 UMAP IF I DONT USE SMOTE
 
 ```{r}
-train.map.df <- train.set[,-333]
-train.map.df[,87:336]<-lapply(train.set[,87:336], as.numeric.factor)
+train.map.df <- train.set[,-332]
+train.map.df[,91:335]<-lapply(train.set[,91:335], as.numeric.factor)
 
 df.map<-umap(train.map.df)
 
@@ -127,7 +137,6 @@ umap.plot(df.map,as.factor(train.set$TJ_Yes))
 Test set UMAP
 ```{r}
 test.map.df<-test.set
-test.map.df[,87:336]<-lapply(test.set[,87:336], as.numeric.factor)
 df.map<-umap(test.map.df)
 
 umap.plot(df.map,as.factor(y))
@@ -157,7 +166,7 @@ levels(y) <- c("No", "Yes")
 library(ranger)
 ##Define hypergrid
 hyper_grid <- expand.grid(
-  mtry = floor((337) * c(.05, .15, .25, .333, .4)),
+  mtry = floor((335) * c(.05, .15, .25, .333, .4)),
   min.node.size = c(1, 3, 5, 10), 
   replace = c(TRUE, FALSE),                               
   sample.fraction = c(.5, .75, 1),
@@ -177,7 +186,7 @@ for(i in loop) {
   fit <- ranger(
     formula         = TJ_Yes ~ ., 
     data            = trainSplit, 
-    num.trees       = (3370),
+    num.trees       = (3350),
     mtry            = hyper_grid$mtry[i],
     min.node.size   = hyper_grid$min.node.size[i],
     replace         = hyper_grid$replace[i],

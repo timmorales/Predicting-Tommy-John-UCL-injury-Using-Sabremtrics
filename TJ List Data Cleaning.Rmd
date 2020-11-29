@@ -267,7 +267,7 @@ df.total$TJ<-ifelse(is.na(df.total$TJ), 0, 1)
 ```
 
 
-We will require that they face at least 30 batters in that season, going off of michigan papers' 10 innings. 
+We will require that pitchers face at least 30 batters in that season, going off of michigan papers' 10 innings. We lose 5 TJ players. and over 200 regular players. 
 
 ```{r}
 
@@ -281,7 +281,6 @@ df.total <- subset(df.total, df.total$BFP >= 30)
 write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
 ```
 
-Lets make sure this dataframe works and make sense 
 
 
 
