@@ -607,6 +607,43 @@ confusionMatrix(as.factor(preds), y, positive = "Yes")
 
 # XGB
 
+## STEP 1 LEARNING RATE 
+```{r}
+library(xgboost)
+X <- as.matrix(logit.trainsplit[,-332])
+Y <- ifelse(trainSplit$TJ_Yes == "Yes", 1,0)
+
+
+hyper_gridxgb1 <- expand.grid(
+  eta = c(0.3, 0.1, 0.05, 0.01, 0.005),
+  error = 0,          # a place to dump results
+  trees = 0          # a place to dump required number of trees
+)
+
+for(i in seq_len(nrow(hyper_gridxgb1))) {
+  set.seed(123)
+  m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb$eta[1]
+    ) 
+  )
+  hyper_gridxgb1$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb1$trees[i] <- m$best_iteration
+}
 
 
 
+
+# results
+hyper_gridxgb1 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+```
