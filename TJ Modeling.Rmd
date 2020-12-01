@@ -39,10 +39,10 @@ test.set[,c(1:90)]<- lapply(test.set[,c(1:90)], scale)
 
 
 
-```{r}
-write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
+```{r warning= FALSE}
+# write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
 # 
-write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
+# write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
 
 #set y and remove from test set
 y<-as.factor(test.set$TJ_Yes)
@@ -71,7 +71,7 @@ table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
 
-write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
+# write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
 
 
 ```
@@ -546,7 +546,7 @@ confusionMatrix(score.pred.rf, y)
 ```
 
 ## Var Imp 
-```{r}
+```{r eval = FALSE}
 varimp.recall <- recall.fit$variable.importance
 recall.imp.df<- data.frame(variable = names(varimp.recall), importance = varimp.recall)
 recall.imp.df <- recall.imp.df %>% 
@@ -580,10 +580,10 @@ logit.trainsplit[,c(91:331,333:336)] <- lapply(logit.trainsplit[,c(91:331,333:33
 
 logit.test <- test.set
 # logit.test[,91:335] <- lapply(logit.test[,91:335], as.numeric.factor)
-
-
+logit.trainsplit <- janitor::clean_names(logit.trainsplit)
+logit.test <- janitor::clean_names(logit.test)
 #running basic logit 
-logitmodel <- train(TJ_Yes ~.,  data = logit.trainsplit, method = "glm", trControl = ctrl, family = "binomial")
+logitmodel <- train(tj_yes ~.,  data = logit.trainsplit, method = "glm", trControl = ctrl, family = "binomial")
 
 
 logitmodel
@@ -609,6 +609,9 @@ confusionMatrix(as.factor(preds), y, positive = "Yes")
 
 ## STEP 1 LEARNING RATE 
 ```{r}
+library(doParallel)
+cl <- parallel::makeCluster(3, setup_strategy = "sequential")
+registerDoParallel(cl)
 library(xgboost)
 X <- as.matrix(logit.trainsplit[,-332])
 Y <- ifelse(trainSplit$TJ_Yes == "Yes", 1,0)
@@ -621,17 +624,18 @@ hyper_gridxgb1 <- expand.grid(
 )
 
 for(i in seq_len(nrow(hyper_gridxgb1))) {
-  set.seed(123)
+  set.seed(23)
   m <- xgb.cv(
     data = X,
     label = Y,
     nrounds = 4000,
     metrics = 'error', 
+    objective = "binary:logistic",
     early_stopping_rounds = 50, 
     nfold = 10,
     verbose = 0,
     params = list( 
-      eta = hyper_gridxgb$eta[1]
+      eta = hyper_gridxgb1$eta[i]
     ) 
   )
   hyper_gridxgb1$error[i] <- min(m$evaluation_log$test_error_mean)
@@ -645,5 +649,249 @@ for(i in seq_len(nrow(hyper_gridxgb1))) {
 hyper_gridxgb1 %>%
   filter(error > 0) %>%
   arrange(error) 
+
+```
+
+
+## Tree parameters 
+
+```{r}
+hyper_gridxgb2 <- expand.grid(
+  eta = 0.3,
+  max_depth = c(1, 3, 5, 7),
+  min_child_weight = c(5, 10, 15),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+
+for(i in seq_len(nrow(hyper_gridxgb2))) {
+  set.seed(23)
+  m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb2$eta[i],
+      max_depth = hyper_gridxgb2$max_depth[i],
+      min_child_weight = hyper_gridxgb2$min_child_weight[i]
+    ) 
+  )
+  hyper_gridxgb2$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb2$trees[i] <- m$best_iteration
+}
+
+
+
+# results
+hyper_gridxgb2 %>%
+  filter(error > 0) %>%
+  arrange(error)
+
+
+```
+
+## GBM attributes 
+
+```{r}
+hyper_gridxgb3 <- expand.grid(
+  eta = 0.30,
+  max_depth = 3,
+  min_child_weight = 5,
+  subsample = c(0.5, 0.75, 1),
+  colsample_bytree = c(0.5, 0.75, 1),
+  colsample_bynode = c(0.5, 0.75, 1),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+for(i in seq_len(nrow(hyper_gridxgb3))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb3$eta[i], 
+      max_depth = hyper_gridxgb3$max_depth[i],
+      min_child_weight = hyper_gridxgb3$min_child_weight[i],
+      subsample = hyper_gridxgb3$subsample[i],
+      colsample_bytree = hyper_gridxgb3$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb3$colsample_bynode[i]
+    ) 
+  )
+  hyper_gridxgb3$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb3$trees[i] <- m$best_iteration
+}
+
+# results
+hyper_gridxgb3 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+```
+
+## Penalization 
+
+```{r}
+hyper_gridxgb4 <- expand.grid(
+  eta = 0.3,
+  max_depth = 3, 
+  min_child_weight = 5,
+  subsample = 1, 
+  colsample_bytree = 0.5,
+  colsample_bynode = 0.75,
+  gamma = c(0, 1, 10, 100),
+  lambda = c(0, 1e-2, 0.1, 1, 100, 1000),
+  alpha = c(0, 1e-2, 0.1, 1, 100, 1000),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+# grid search
+for(i in seq_len(nrow(hyper_gridxgb4))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb4$eta[i], 
+      max_depth = hyper_gridxgb4$max_depth[i],
+      min_child_weight = hyper_gridxgb4$min_child_weight[i],
+      subsample = hyper_gridxgb4$subsample[i],
+      colsample_bytree = hyper_gridxgb4$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb4$colsample_bynode[i],
+      gamma = hyper_gridxgb4$gamma[i], 
+      lambda = hyper_gridxgb4$lambda[i], 
+      alpha = hyper_gridxgb4$alpha[i]
+    ) 
+  )
+  hyper_gridxgb4$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb4$trees[i] <- m$best_iteration
+}
+
+# results
+hyper_gridxgb4 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+
+
+
+
+```
+
+## Retraining eta with params 
+
+```{r}
+hyper_gridxgb5 <- expand.grid(
+  eta = c(0.3, 0.1, 0.05, 0.01, 0.005),
+  max_depth = 3, 
+  min_child_weight = 5,
+  subsample = 1, 
+  colsample_bytree = 0.5,
+  colsample_bynode = 0.75,
+  gamma = 0,
+  lambda =  0.1, 
+  alpha = 0.1,
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+# grid search
+for(i in seq_len(nrow(hyper_gridxgb5))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb5$eta[i], 
+      max_depth = hyper_gridxgb5$max_depth[i],
+      min_child_weight = hyper_gridxgb5$min_child_weight[i],
+      subsample = hyper_gridxgb5$subsample[i],
+      colsample_bytree = hyper_gridxgb5$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb5$colsample_bynode[i],
+      gamma = hyper_gridxgb5$gamma[i], 
+      lambda = hyper_gridxgb5$lambda[i], 
+      alpha = hyper_gridxgb5$alpha[i]
+    ) 
+  )
+  hyper_gridxgb5$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb5$trees[i] <- m$best_iteration
+}
+# results
+hyper_gridxgb5 %>%
+  filter(error > 0) %>%
+  arrange(error)# %>%
+  # glimpse()
+
+
+
+
+
+
+```
+
+## Final XBoost
+
+```{r}
+params <- list(
+  eta = 0.3,
+  max_depth = 3, 
+  min_child_weight = 5,
+  subsample = 1, 
+  colsample_bytree = 0.5,
+  colsample_bynode = 0.75,
+  gamma = 0,
+  lambda = 0.01,
+  alpha = 0.1
+)
+
+
+set.seed(23)
+xgb.opt<- xgboost(
+  params = params,
+  data = X,
+  label = Y,
+  nrounds = 650,
+  objective = "binary:logistic",
+  verbose = 0
+)
+```
+
+## Test Set Performance 
+```{r}
+xgboost.pred <-predict(xgb.opt, as.matrix(logit.test))
+xgboost.pred <- as.factor(ifelse(xgboost.pred >= 0.5, "Yes", "No"))
+confusionMatrix(xgboost.pred, y)
+
+```
+
+## Var Imp Optimal Model 
+
+```{r}
+library(vip)
+vip(xgb.opt, num_features = 25, geom='point', aesthetics = list(color = "steelblue"))
 
 ```
