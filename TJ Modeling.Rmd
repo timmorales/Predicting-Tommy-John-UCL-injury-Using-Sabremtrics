@@ -55,6 +55,7 @@ train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
 
 #check balance 
 prop.table(table(train.set$TJ_Yes))
+prop.table(table(y))
 table(train.set$TJ_Yes)
 
 #make factor before i SMOTE 
@@ -85,7 +86,7 @@ map.df[,91:335]<-lapply(trainSplit[,91:335], as.numeric.factor)
 
 df.map<-umap(map.df)
 umap.plot<-function(x, labels,
-          main="A UMAP visualization of the Tommy John dataset",
+          main="A UMAP visualization of the SMOTE Set",
           colors=c("grey", "red"),
           pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
           cex.main=1, cex.legend=1) {
@@ -130,7 +131,7 @@ df.map<-umap(train.map.df)
 
 umap.plot(df.map,as.factor(train.set$TJ_Yes))
 
-
+levels(train.set$TJ_Yes) <- c("No", "Yes")
 
 ```
 
@@ -138,7 +139,7 @@ Test set UMAP
 ```{r}
 test.map.df<-test.set
 df.map<-umap(test.map.df)
-
+levels(y) <- c("No", "Yes")
 umap.plot(df.map,as.factor(y))
 
 ```
@@ -326,7 +327,8 @@ score.fit <- ranger(
     num.threads     = 3,
     splitrule = "gini",
     classification = T,
-    probability = T
+    probability = T,
+    importance = "impurity"
   )
 
 
@@ -346,6 +348,52 @@ confusionMatrix(score.pred.rf, y)
 
 ```
 
+## Var Imp 
+
+```{r}
+varimp.score <- score.fit$variable.importance
+var.imp.df<- data.frame(variable = names(varimp.score), importance = varimp.score)
+var.imp.df <- var.imp.df %>% 
+  arrange(desc(importance))
+
+var.imp.df <- var.imp.df[1:20,]
+
+var.imp.df$variable <- c(
+  "Q2 of Splitter X Break",
+  "Games Started",
+  "Does Not Throw Splitter Flag",
+  "Hard Hit Percentage",
+  "Q3 of Sinker Z Break",
+  "Innings Per Game",
+  "Bottom 25% Curve Ball Z Break",
+  "Formatted Number of Knuckle Curves",
+  "Pitches Per Game",
+  "Player Age",
+  "Number of Pitches Outside Strike Zone",
+  "Hit By Pitch Percentage",
+  "Formatted Number of Changeups",
+  "Pulled Ball Percentage",
+  "Birth Year",
+  "In Zone Pitch Percentage",
+  "Loses",
+  "Out of Zone Pitch Percentage",
+  "Q3 of Breaking Ball Speed Range",
+  "Batters Faced Pitching")
+
+
+ggplot(var.imp.df, aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("RF Custom Metric Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="grey", high="#CC0066")
+
+
+
+
+
+```
 
 
 # RF Optimizied Just Train Set
@@ -884,6 +932,10 @@ xgb.opt<- xgboost(
 #saveRDS(xgb.opt, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/xgbopt.rds")
 xgb.opt <- readRDS("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/xgbopt.rds")
 
+xgboost.pred.train <-predict(xgb.opt, X)
+xgboost.pred.train <- as.factor(ifelse(xgboost.pred.train >= 0.5, "Yes", "No"))
+confusionMatrix(xgboost.pred.train, trainSplit$TJ_Yes)
+
 
 ```
 
@@ -899,7 +951,44 @@ confusionMatrix(xgboost.pred, y)
 
 ```{r}
 library(vip)
-vip(xgb.opt, num_features = 28, geom='point', aesthetics = list(color = "steelblue"))
+xbg.imp <- vip(xgb.opt, num_features = 28, geom='point', aesthetics = list(color = "steelblue"))
+
+xgb.imp.df <- xbg.imp$data[c(1:20),]
+
+xgb.imp.df$variable <- c(
+  "Q2 of Splitter X Break",
+  "Games Started",
+  "Intentional Walks",
+  "Formatted Number of Knuckle Curves",
+  "Number of Pitches Outside Strike Zone",
+  "Pulled Ball Percentage",
+  "Balks",
+  "Month of Debut",
+  "Player Age",
+  "Q3 of Sinker Z Break",
+  "Birth Year",
+  "Q2 Curve Ball Average Speed",
+  "Does Not Throw Curveball Flag",
+  "Hard Hit Percentage",
+  "Does Not Throw Sinker Flag",
+  "Weight",
+  "Ground Ball Double Plays",
+  "Height",
+  "Games Finished",
+  "Bottom 25% Breaking Ball Speed")
+
+xgb.imp.df <- xgb.imp.df %>% 
+  arrange(desc(Importance))
+
+ggplot(xgb.imp.df, aes(x=reorder(variable,Importance), y=Importance,fill=Importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("XGBoost Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="grey", high="steelblue")
+
+
 
 ```
 
