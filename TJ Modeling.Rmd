@@ -1185,3 +1185,42 @@ confusionMatrix(opt.cutoff, y)
 
 
 ```
+
+Visualizing Probability Results
+
+```{r}
+library(ggbeeswarm)
+Vis.Results <- data.frame("PredictedProbability" = SL.pred$pred, "UnderwentSurgery" = y)
+
+ggplot(Vis.Results, aes(y = PredictedProbability, x = UnderwentSurgery, fill = UnderwentSurgery, color = UnderwentSurgery)) +
+    geom_beeswarm() +
+    geom_boxplot(alpha = 0, color = "black") +
+    theme_minimal() +
+    ylab("Stacked Model Prediction") +
+    xlab("Underwent Surgery") +
+    scale_fill_brewer(guide = FALSE, palette = "Paired") +
+    scale_color_brewer(guide = FALSE, palette = "Paired") 
+
+
+```
+
+```{r}
+library(classifierplots)
+library(gbm)
+
+Vis.Results$Binary <- ifelse(Vis.Results$UnderwentSurgery == "Yes",1,0)
+calibration_plot(y, SL.pred$pred)+
+  geom_hline(yintercept = 01.9, color = 'red')
+
+calibrate.plot(Vis.Results$UnderwentSurgery, Vis.Results$PredictedProbability)
+  abline(h=0.019, col="red")
+
+positives_plot(Vis.Results$Binary, Vis.Results$PredictedProbability)+
+  geom_hline(yintercept = 01.9, color = 'red')
+
+propensity_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02)+
+  geom_hline(yintercept = 01.9, color = 'red')
+
+recall_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02, show_numbers = T)
+```
+
