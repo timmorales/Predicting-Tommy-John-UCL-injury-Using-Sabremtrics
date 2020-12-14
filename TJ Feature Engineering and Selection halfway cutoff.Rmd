@@ -1,0 +1,175 @@
+---
+title: "TJ Feature Engineering"
+author: "Tim Morales"
+date: "10/24/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df test.csv")
+```
+
+Im going to drop a lot of the tommy john info as its either irrelevant or repeated elsewhere. 
+
+Dropping and Flagging Variables 
+```{r}
+## removing random surgery information 
+colnames(df[, c(185:228)])
+df<-df[, -c(185:228)]
+
+# make yearID and TJ a factor
+df$yearID <- as.factor(df$yearID)
+df$TJ<-as.factor(df$TJ)
+levels(df$TJ) = c("No", "Yes")
+
+
+#make a made postseason flag 
+df$made_postseason = as.factor(ifelse(is.na(df$post_IPouts),0,1))
+
+#i can fill playoff NAs with 0 
+#colnames(df[,c(162:186)])
+df[,c(162:186)][is.na(df[c(162:186)])] <- 0
+
+#Making a pitchs per game stat 
+df$pitches_per_game<- (df$pitch_count / df$p_game)
+
+#Percentages if NA set to 0 
+formatted.names<- c("n_ff_formatted","n_sl_formatted","n_ch_formatted","n_cukc_formatted","n_sift_formatted","n_fc_formatted","n_kn_formatted","n_fs_formatted", "n_fastball_formatted","n_breaking_formatted","n_offspeed_formatted")
+df[formatted.names][is.na(df[formatted.names])] <- 0
+
+
+```
+
+
+Previous paper shows warm high schools increase risk. We use birth place and assign based on states in paper as well as handselected warm countries. 
+
+```{r}
+#warm weather indicator 
+warmstates<- c("CA","AZ","NM","TX","LA","MS","AL","GA","FL","SC")
+outsideUSCold<-c("Lithuania","Germany","CAN", "USA")
+#print all countries 
+levels(as.factor(df$birthCountry))
+
+df$warm_birth_place <- ifelse(df$birthState %in% warmstates,1,0)
+#make "notin"
+`%notin%` <- Negate(`%in%`)
+#outside US 
+df$warm_birth_place <- as.factor(ifelse(df$birthCountry %notin% outsideUSCold,1,df$warm_birth_place))
+```
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+#drop the 1 missing player nameFirst
+### check miss to be fixed 
+# colSums(is.na(df))
+#i drop the below columns because theyre either not usefully or impossible to impute
+df<- df %>% 
+   mutate(debut = ymd(debut)) %>% 
+  mutate_at(vars(debut), funs(year, month, day))%>%
+  select(-c("meatball_swing_percent", "deathYear","deathMonth","deathDay","deathCountry","deathState","deathCity", "nameLast.y","nameFirst.y","X","X.1","birthMonth","birthDay","birthCountry","birthState","birthCity","nameGiven", "finalGame", "day", "debut", "n"))
+
+#make the debut variable into year and month of debut 
+df <- rename(df, c("year_debut" = "year" , "month_debut"= "month"))
+df1<-df
+```
+
+Bin variables with lots of missing 
+```{r}
+
+df.not.bin<- df
+
+col.w.na = colSums(is.na(df)) > 0
+ 
+
+library(OneR)
+
+col.w.na.names<-colnames(df)[col.w.na]
+#col.w.na.names
+
+#i make the function i want 
+bin.omit.false<- function(x){
+  bin(x, nbins = 4, na.omit = F, labels = c("Bottom_25", "Q2", "Q3", "Top_25")) }
+
+doesnt.throw<- function(x){
+  x<-ifelse(is.na(x)==T, "Does_Not_Throw", x)
+}
+
+df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
+
+```
+
+Feature engineer making these per inning stats 
+
+```{r}
+df$pitch_per_out <- (df$pitch_count/ df$IPouts)
+df$innings_per_game <- (df$IPouts/ df$G.x)
+df$pitcher_per_BF <- df$pitch_count/ df$BFP
+df$batters_per_inning <- df$BFP / (df$IPouts/3)
+
+
+df$fastball_per_inning <- df$pitch_count_fastball / (df$IPouts/3)
+df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
+```
+
+We remove nearzero variane variables unless they are related to previous research like IP or BFP
+
+```{r}
+library(caret)
+nzv <- nearZeroVar(df)
+
+colnames(df)[nzv]
+
+nzv.final <- nzv[-c(11,14,15,25,33)]
+
+df<- df[,-nzv.final]
+
+```
+
+
+
+One hot encode the factors using recipe 
+
+```{r}
+
+# Drop identifying character variables 
+df.onehot <- df %>%
+  select(- c("nameLast.x", "nameFirst.x", "PlayerName", "playerID", "teamID", "retroID", "bbrefID"))
+
+
+
+
+library(recipes)
+rec = recipe( ~ ., data = df.onehot)
+rec_2 = rec %>% 
+  step_dummy(all_predictors(),-all_numeric(), one_hot = T)
+d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
+
+df.juice<-juice(d_prep)
+
+
+# 
+#write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData test.csv")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

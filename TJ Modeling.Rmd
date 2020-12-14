@@ -1200,13 +1200,43 @@ ggplot(Vis.Results, aes(y = PredictedProbability, x = UnderwentSurgery, fill = U
     xlab("Underwent Surgery") +
     scale_fill_brewer(guide = FALSE, palette = "Paired") +
     scale_color_brewer(guide = FALSE, palette = "Paired") 
+yes_group = subset(Vis.Results, Vis.Results$UnderwentSurgery == "Yes")
+no_group = subset(Vis.Results, Vis.Results$UnderwentSurgery == "No")
 
+ggplot(Vis.Results, aes(PredictedProbability,..density.., fill = UnderwentSurgery)) +
+    geom_density(alpha = 0.5) +
+    xlab("Predicted Probability Underwent Surgery")+
+  ylab("Density")+
+    scale_fill_manual(values = c("steelblue","grey"))+
+  labs(fill = "Underwent Surgery")+
+  ggtitle("Predicted Probabilities Dist. Between Groups")
+
+
+ggplot(Vis.Results, aes(PredictedProbability,..density.., fill = UnderwentSurgery)) +
+    geom_histogram(binwidth = 0.01,position="identity") +
+    xlab("Predicted Probability Underwent Surgery")+
+    scale_fill_manual(values = c("steelblue","grey"))+
+  labs(fill = "Underwent Surgery")
+
+
+
+
+baser.check <- ggplot(data = yes_group, aes(x=PredictedProbability))+
+geom_density(alpha=0.5, fill='blue') +
+geom_density(data = no_group, aes(x=PredictedProbability,y=..scaled..), alpha=0.5, fill='red') +
+labs(title = "Base R Split")+
+labs(y="Density")+
+labs(x="Point Differential")
 
 ```
 
 ```{r}
 library(classifierplots)
 library(gbm)
+
+Vis.Results$UnderwentSurgery <- relevel(Vis.Results$UnderwentSurgery, ref = "Yes")
+calib <- calibration(UnderwentSurgery ~ PredictedProbability, data = Vis.Results)
+xyplot(calib, auto.key = list(columns = 2),main="Calibration Plot of Test Set Predictions")
 
 Vis.Results$Binary <- ifelse(Vis.Results$UnderwentSurgery == "Yes",1,0)
 calibration_plot(y, SL.pred$pred)+

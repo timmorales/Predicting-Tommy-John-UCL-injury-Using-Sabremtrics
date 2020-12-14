@@ -1,0 +1,286 @@
+---
+title: "Tommy John Project Data Cleaning"
+author: "Tim Morales"
+date: "9/24/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Cleaning
+
+```{r}
+library(tidyverse)
+```
+
+## Tommy John List 
+
+The first dataset we will handle is the list of all surgeries. We are only keeping those whose injury is after August 2015 so we can use statcast information on their injury. If surgery was done in August or later of a year, that same year's statistics will be used, if done before august, the prior year is used. All 2020s will use 2019 due to weird shortened season. 
+
+```{r}
+tj_list<-read.csv('/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/TJ List.csv')
+table(tj_list$Level)
+tj_list$Year_Mon<-as.numeric(paste(tj_list$Year,tj_list$Month,sep=""))
+
+
+#keep everyone up to sept 2015 
+mlb_only_tj_list<-subset(tj_list, Level=="MLB" & Year_Mon >= 20158)
+mlb_only_tj_list<-subset(mlb_only_tj_list, Level=="MLB" & Year >= 2015)
+table(mlb_only_tj_list$Level)
+
+
+#create a variable to denote the last year before their surgery 
+#if they got surgery after or during aril  in that year
+# we can use the same season. 
+#if before april, we use year prior.
+
+mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Mon >= 7, mlb_only_tj_list$Year,mlb_only_tj_list$Year - 1) 
+
+
+#if surgery done in 2020, auto use 2019
+mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Year==2020, 2019, mlb_only_tj_list$Year_for_stats)
+```
+
+
+Then we must look at players who repeated surgery. If they have undergone surgery twice, put that in a new column, with binary 1 0, 1 deonting repeated. We also feature the column for those with repeated surgery how many years between surgery.
+
+```{r}
+df_repeated<- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Repeat TJ List.csv")
+df_repeated<-df_repeated[!is.na(df_repeated$Years.Between),]
+#merge together 
+mlb_only_tj_list<-left_join(mlb_only_tj_list,df_repeated[,c(1,4)], by = "Player")
+
+mlb_only_tj_list$Repeat_Injury<-ifelse(is.na(mlb_only_tj_list$Years.Between),0,1)
+
+#then lets keep only the pitchers 
+mlb_only_tj_list<-mlb_only_tj_list%>%
+  filter(Position == "P")
+
+```
+
+Merge the names
+
+I have a player list from Tanner Bell, MLB author. 
+```{r}
+translator.list<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SFBB Player ID Map - PLAYERIDMAP.csv")
+translator.list$fgid<-translator.list$IDFANGRAPHS
+translator.list$bbrefid<-translator.list$IDPLAYER
+```
+
+I can now use left_join to add the bbrefIDs to the TJ list using fangraphs ID. 
+
+
+There are still a few that do not have bbrefID, for them I will look up on my own and store in csv, then import. 
+
+```{r}
+tj.list.Id<-left_join(mlb_only_tj_list,translator.list[,c(43,44)], by = "fgid")
+
+missing.indx<-which(is.na(tj.list.Id$bbrefid))
+missing.names<-tj.list.Id$Player[missing.indx]
+missing.names
+
+hand.filled.id<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/manual fill bbref for missing.csv")[,c(1,2)]
+
+#fill those missing values that I hand filled 
+tj.list.Id$bbrefid[missing.indx]<-hand.filled.id$bbrefid
+
+#just checking 
+#tj.list.Id[,c(1,47)]
+```
+
+So now for me to be able to merge all of these labels together I will do so by baseball reference ID as it appears in all data sets. 
+
+```{r}
+#LAHMAN stats 
+pitching <- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/Pitching.csv")
+
+#only keep after 2015 and making summing stats for each player each year
+pitching<-pitching%>%
+  filter(yearID >= 2015)
+   
+#get team with most innings played for when played for multiple teams
+player.teams<-pitching[,c(1,2,4,5,13)]%>%
+    group_by(playerID, yearID)%>%
+   arrange(by_group=desc(IPouts))%>%
+   filter(row_number() == 1)
+
+pitching<-pitching[,-c(3,4,5,19,20)]
+pitching<-aggregate(.~playerID+yearID,pitching, sum)
+
+#add the character variables back on DOESNT WORK I NEED TO ONLY GET FIRST
+pitching<-left_join(pitching, player.teams[,-5], by = c('playerID', 'yearID'))
+
+#import names translation 
+namelist<- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/People.csv")
+
+#inner join to get each player its needed labels 
+named_pitching<- inner_join(pitching, namelist, by= 'playerID')
+
+```
+
+post season pitching
+
+I dont have to be concerned with two teams in same year here but i need to combine each series for each player
+```{r}
+post.season.pitching<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/PitchingPost.csv")
+
+#dropping calculated stats and characters like league and playoff round
+post.season.pitching<-post.season.pitching[,-c(3,4,5,19,20)]
+
+#combine stats across series 
+post.season.pitching<-post.season.pitching%>%
+  filter(yearID >= 2015)%>%
+   group_by(playerID, yearID)%>%
+   summarise_each(funs(sum))
+               
+               
+```
+
+The next step is to left join, adding injury information to players but only on the years being used as stats. 
+
+Now we need to work with Sabermetrics datasets. 
+MINIMUM 10 PA IN THESE LOWEST REQUIREMENT
+
+```{r}
+SM2015<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2015SM.csv")
+SM2016<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2016SM.csv")
+SM2017<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2017SM.csv")
+SM2018<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2018SM.csv")
+SM2019<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2019SM.csv")
+
+
+#combine into one df 
+SMALL<-rbind(SM2015,SM2016,SM2017,SM2018,SM2019)
+colnames(SMALL)[1]<-"nameLast"
+colnames(SMALL)[2]<-"nameFirst"
+colnames(SMALL)[3]<-"yearID"
+```
+
+Try and correctly merge 
+```{r}
+#make full name 
+SMALL$PlayerName<- paste(SMALL$nameFirst,SMALL$nameLast,sep=" ")
+
+#remove leading and trailing
+SMALL$PlayerName<-trimws(SMALL$PlayerName, which = c("both"), whitespace = "[ \t\r\n]")
+
+#NAMED PITCHING CLEANING 
+
+named_pitching$nameFirst<-gsub("\\. ","\\.",named_pitching$nameFirst)
+
+named_pitching$PlayerName<-paste(named_pitching$nameFirst,named_pitching$nameLast,sep=" ")
+
+#remove leading and trailing
+
+named_pitching$PlayerName<-trimws(named_pitching$PlayerName, which = c("both"), whitespace = "[ \t\r\n]")
+
+```
+
+
+
+```{r}
+#first go to see who is missing
+ij.pitch<-inner_join(SMALL,named_pitching, by = c("PlayerName","yearID"))
+
+#we will track who is missing and manually fill w bbref id 
+overlap<-SMALL$PlayerName %in% ij.pitch$PlayerName 
+namecon<-data.frame(PlayerName=SMALL$PlayerName[overlap==F], yearID=SMALL$yearID[overlap==F])
+
+# this just shows that these names are NOT the same between the two datasets.
+# namecon$name %in% SMALL$PlayerName
+# namecon$name %in% named_pitching$PlayerName
+```
+
+```{r}
+#import overlap baseball reference numbers I hand filled 
+SM.fill<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/nameissues.csv")
+
+namecon$bbrefID<-SM.fill$bbrefID
+
+SM.fill.test<-left_join(namecon, named_pitching, by=c("bbrefID", "yearID"))
+colnames(SM.fill.test)[1] = "PlayerName"
+
+misfits<-anti_join(SMALL,named_pitching, by = c("PlayerName","yearID"))
+
+rj.pitch<-right_join(SM.fill.test,misfits, by = c("PlayerName", "yearID"))
+rj.pitch<-rj.pitch[,-52]
+df.final<-rbind(ij.pitch,rj.pitch)
+
+# colnames(rjpitch) %in% colnames(ij.pitch)
+
+#making sure information is proper 
+#removing duplicates 
+
+df.final<-unique(df.final)
+
+#looking for missing 
+missing.inform<-is.na(df.final$p_game)
+# 
+# df.final$PlayerName[missing.inform==T]
+
+#inconsistency in counting stat to confirm correct 
+inconsist<-df.final$p_game == df.final$G
+table(inconsist)
+
+### we have to drop these people due to inconsistency in data 
+df.final$PlayerName[inconsist==F]
+
+## drop those 
+df.pitch<-df.final[inconsist,]
+```
+
+In all, I have 3645 observations out of 3651 eligble season retained. Those dropped had either no Lahman data or could not be confirmed as reliable information. 
+
+I now need to add the postseason information which I can do by player and playerID and yearID
+
+```{r}
+colnames(post.season.pitching)[-c(1,2)]<-paste("post",colnames(post.season.pitching)[-c(1,2)], sep ="_" )
+
+post.season.pitching$bbrefID = post.season.pitching$playerID
+
+df.plus.post<-left_join(df.pitch,post.season.pitching, by = c("playerID", "yearID"))
+
+```
+
+Finally, I have to add the tommy john information where needed 
+
+```{r}
+colnames(tj.list.Id)[47]<-"bbrefID"
+colnames(tj.list.Id)[44]<-"yearID"
+
+#make my TJ flag
+tj.list.Id$TJ<-1
+tj.list.Id[,-c(22:42)]
+
+colnames(df.plus.post)[160]<-"bbrefID"
+
+#able to keep 97 players with TJ 
+df.total<-left_join(df.plus.post, tj.list.Id, by = c( "bbrefID", "yearID"))
+
+#create the flag 
+df.total$TJ<-ifelse(is.na(df.total$TJ), 0, 1)
+
+```
+
+
+We will require that pitchers face at least 30 batters in that season, going off of michigan papers' 10 innings. We lose 5 TJ players. and over 200 regular players. 
+
+```{r}
+
+injured <- subset(df.total, df.total$TJ == 1)
+which(injured$BFP<30)
+injured$PlayerName[which(injured$BFP<30)]
+
+#keep only those with more than 30 batters faced 
+df.total <- subset(df.total, df.total$BFP >= 30)
+
+#write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df test.csv")
+```
+
+
+
+

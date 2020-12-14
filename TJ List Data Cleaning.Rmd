@@ -27,7 +27,7 @@ table(tj_list$Level)
 tj_list$Year_Mon<-as.numeric(paste(tj_list$Year,tj_list$Month,sep=""))
 
 
-#keep everyone up to september 2015 
+#keep everyone up to sept 2015 
 mlb_only_tj_list<-subset(tj_list, Level=="MLB" & Year_Mon >= 20158)
 mlb_only_tj_list<-subset(mlb_only_tj_list, Level=="MLB" & Year >= 2015)
 table(mlb_only_tj_list$Level)
@@ -278,7 +278,7 @@ injured$PlayerName[which(injured$BFP<30)]
 #keep only those with more than 30 batters faced 
 df.total <- subset(df.total, df.total$BFP >= 30)
 
-write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
+#write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
 ```
 
 

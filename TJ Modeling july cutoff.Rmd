@@ -1,0 +1,1260 @@
+---
+title: "TJ Modeling"
+author: "Tim Morales"
+date: "11/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData test.csv")
+df<- df[,-1]
+
+#train test split
+library(DMwR)
+library(caret)
+library(umap)
+library(dplyr)
+library(recipes)
+set.seed(23)
+train.indx <- createDataPartition(df$TJ_Yes, p = .75, list = F)
+
+drop.vars<-c("Years.Between", "Repeat_Injury","TJ_No" )
+
+train.set<-data.frame(df[train.indx, -which(names(df) %in% drop.vars)])
+
+test.set<-data.frame(df[-train.indx,-which(names(df) %in% drop.vars)])
+
+#center and scale numerics
+train.set[,c(1:90)]<- lapply(train.set[,c(1:90)], scale)
+
+#center and scale numerics
+test.set[,c(1:90)]<- lapply(test.set[,c(1:90)], scale)
+
+```
+
+
+
+```{r warning= FALSE}
+# write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
+# 
+# write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
+
+#set y and remove from test set
+y<-as.factor(test.set$TJ_Yes)
+test.set<- test.set %>%
+  select(-c("TJ_Yes"))
+
+#make factor
+train.set$TJ_Yes<-as.factor(train.set$TJ_Yes)
+
+
+#check balance 
+prop.table(table(train.set$TJ_Yes))
+prop.table(table(y))
+table(train.set$TJ_Yes)
+
+#make factor before i SMOTE 
+train.set[,c(91:336)]<- lapply(train.set[,c(91:336)], as.factor)
+set.seed(23)
+trainSplit <- SMOTE(TJ_Yes ~ ., train.set, perc.over = 1000, perc.under = 400)
+
+#perc over /100 is how many times u randomly sample minority 
+#perc under/ 100 is ratio of majority to minority you allow 
+
+#i select this because it is just like oversampling the majority and leaving minority
+
+table(trainSplit$TJ_Yes)
+
+prop.table(table(trainSplit$TJ_Yes))
+
+# write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
+
+
+```
+
+I used Uniform Manifold Approximation Projection to visualize data and reduce dimensions to asses clustering effect. 
+```{r}
+library(umap)
+as.numeric.factor <- function(x) {as.numeric(levels(x))[x]}
+map.df <- trainSplit[,-332]
+map.df[,91:335]<-lapply(trainSplit[,91:335], as.numeric.factor)
+
+df.map<-umap(map.df)
+umap.plot<-function(x, labels,
+          main="A UMAP visualization of the SMOTE Set",
+          colors=c("grey", "red"),
+          pad=0.1, alpha=.5, cex=0.65, pch=19, add=FALSE, legend.suffix="",
+          cex.main=1, cex.legend=1) {
+         layout = x   
+         if (is(x, "umap")) {     layout = x$layout
+         } 
+   
+       xylim = range(layout)
+       xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
+      if (!add) {
+      par(mar=c(0.2,0.7,1.2,0.7), ps=10)
+     plot(xylim, xylim, type="n", axes=F, frame=F)
+     rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)  
+   }
+   points(layout[,1], layout[,2], col=colors[as.integer(labels)],
+          cex=cex, pch=pch)
+   mtext(side=3, main, cex=cex.main)
+
+   labels.u = unique(labels)
+   legend.pos = "topright"
+  legend.text = as.character(labels.u)
+   if (add) {
+     legend.pos = "bottomright"
+     legend.text = paste(as.character(labels.u), legend.suffix)
+   }
+   legend(legend.pos, legend=legend.text,
+          col=colors[as.integer(labels.u)],
+          bty="n", pch=pch, cex=cex.legend)
+}
+
+umap.plot(df.map,as.factor(trainSplit$TJ_Yes))
+
+```
+
+UMAP IF I DONT USE SMOTE
+
+```{r}
+train.map.df <- train.set[,-332]
+train.map.df[,91:335]<-lapply(train.set[,91:335], as.numeric.factor)
+
+df.map<-umap(train.map.df)
+
+umap.plot(df.map,as.factor(train.set$TJ_Yes))
+
+levels(train.set$TJ_Yes) <- c("No", "Yes")
+
+```
+
+Test set UMAP
+```{r}
+test.map.df<-test.set
+df.map<-umap(test.map.df)
+levels(y) <- c("No", "Yes")
+umap.plot(df.map,as.factor(y))
+
+```
+
+The interesting take away from UMAP is that when we use SMOTE, we see to lose the overarching structure in the data. This can be seen in how the train and test splits both have similar structure but the UMAP is different for the SMOTE. 
+
+This is raises concerns about the functionality of smote in this dataset. 
+
+
+
+
+
+```{r}
+
+levels(trainSplit$TJ_Yes) <- c("No", "Yes")
+levels(y) <- c("No", "Yes")
+
+```
+
+
+# RF Optimization W SMOTE
+
+
+```{r}
+library(ranger)
+##Define hypergrid
+hyper_grid <- expand.grid(
+  mtry = floor((335) * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .75, 1),
+  cutoff = c(0.05, 0.07, 0.10,0.15, 0.5)
+)
+cuts = c(0.10, 0.15, 0.3, 0.4, 0.5)
+
+
+end<-nrow(hyper_grid)
+
+
+loop<-seq(1,end,5)
+
+##Full cartesian grid search
+for(i in loop) {
+  ##ith hyperparameter combination
+  fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = (3350),
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = F,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+    for (j in 1:length(cuts)){
+    hyper_grid$cutoff[i+j-1]<- cuts[j]
+    fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, trainSplit$TJ_Yes, positive = "Yes")
+  #making my own F1 score type but giving more weight to recall
+  # i want a balance between recall and postive pred value
+  hyper_grid$Score[i+j-1] <-  1.5*(hyper_grid$sens[i+j-1]) + hyper_grid$NPV[i+j-1]
+    }
+}
+
+
+NPV_grid <- hyper_grid %>%
+  arrange(desc(NPV),desc(Score),desc(sens)) %>%
+  head(10)
+
+
+head(NPV_grid)
+```
+
+## Optimized on NPV 
+
+```{r}
+opt.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 4000,
+    mtry            = NPV_grid$mtry[1],
+    min.node.size   = NPV_grid$min.node.size[1],
+    replace         = NPV_grid$replace[1],
+    sample.fraction = NPV_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+train.pred.rf<- as.factor(ifelse(opt.fit$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(train.pred.rf, trainSplit$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on NPV
+
+```{r}
+opt.rf.pred = predict(opt.fit, test.set)
+
+classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(classification.pred.rf, y)
+
+```
+
+## Optimized on Recall 
+
+```{r}
+recall_grid<-hyper_grid %>%
+  arrange(desc(sens),desc(Score), desc(NPV)) %>%
+  head(10)
+
+head(recall_grid)
+```
+
+```{r}
+recall.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 4000,
+    mtry            = recall_grid$mtry[1],
+    min.node.size   = recall_grid$min.node.size[1],
+    replace         = recall_grid$replace[1],
+    sample.fraction = recall_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[2],"Yes","No"))
+confusionMatrix(recall.rf, trainSplit$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on Recall
+
+```{r}
+opt.recall = predict(recall.fit, test.set)
+
+recall.pred.rf<- as.factor(ifelse(opt.recall$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.pred.rf, y)
+
+```
+
+
+## Optimized on my custom score 
+
+```{r}
+
+score_grid<-hyper_grid %>%
+  arrange(desc(Score), desc(sens), desc(NPV)) %>%
+  head(10)
+
+head(score_grid)
+```
+
+```{r}
+score.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = trainSplit, 
+    num.trees       = 4000,
+    mtry            = score_grid$mtry[1],
+    min.node.size   = score_grid$min.node.size[1],
+    replace         = score_grid$replace[1],
+    sample.fraction = score_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors =FALSE,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T,
+    importance = "impurity"
+  )
+
+
+
+score.rf<- as.factor(ifelse(score.fit$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.rf, trainSplit$TJ_Yes)
+
+```
+
+### Testset results with custom score 
+
+```{r}
+opt.score = predict(opt.fit, test.set)
+
+score.pred.rf<- as.factor(ifelse(opt.score$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.pred.rf, y)
+
+```
+
+## Var Imp 
+
+```{r}
+varimp.score <- score.fit$variable.importance
+var.imp.df<- data.frame(variable = names(varimp.score), importance = varimp.score)
+var.imp.df <- var.imp.df %>% 
+  arrange(desc(importance))
+
+var.imp.df <- var.imp.df[1:20,]
+
+var.imp.df$variable <- c(
+  "Q2 of Splitter X Break",
+  "Games Started",
+  "Does Not Throw Splitter Flag",
+  "Hard Hit Percentage",
+  "Q3 of Sinker Z Break",
+  "Innings Per Game",
+  "Bottom 25% Curve Ball Z Break",
+  "Formatted Number of Knuckle Curves",
+  "Pitches Per Game",
+  "Player Age",
+  "Number of Pitches Outside Strike Zone",
+  "Hit By Pitch Percentage",
+  "Formatted Number of Changeups",
+  "Pulled Ball Percentage",
+  "Birth Year",
+  "In Zone Pitch Percentage",
+  "Loses",
+  "Out of Zone Pitch Percentage",
+  "Q3 of Breaking Ball Speed Range",
+  "Batters Faced Pitching")
+
+
+ggplot(var.imp.df, aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("RF Custom Metric Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="grey", high="#CC0066")
+
+
+
+
+
+```
+
+
+# RF Optimizied Just Train Set
+
+```{r}
+
+levels(train.set$TJ_Yes) <- c("No", "Yes")
+levels(y) <- c("No", "Yes")
+
+```
+
+
+
+```{r eval=FALSE}
+library(ranger)
+##Define hypergrid
+hyper_grid <- expand.grid(
+  mtry = floor((337) * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .75, 1),
+  cutoff = c(0.05, 0.07, 0.10,0.15, 0.5)
+)
+cuts = c(0.10, 0.15, 0.3, 0.4, 0.5)
+
+
+end<-nrow(hyper_grid)
+
+loop<-seq(1,end,5)
+
+##Full cartesian grid search
+for(i in loop) {
+  ##ith hyperparameter combination
+  fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = (3370),
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = F,
+    seed            = 23,
+    respect.unordered.factors = 'order',
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+    for (j in 1:length(cuts)){
+    hyper_grid$cutoff[i+j-1]<- cuts[j]
+    fit.pred<- as.factor(ifelse(fit$predictions[,2]>cuts[j],"Yes","No"))
+    hyper_grid$sens[i+j-1] <- sensitivity(fit.pred, train.set$TJ_Yes, positive = "Yes")
+    hyper_grid$NPV[i+j-1] <- negPredValue(fit.pred, train.set$TJ_Yes, positive = "Yes")
+  #making my own F1 score type but giving more weight to recall
+  # i want a balance between recall and postive pred value
+  hyper_grid$Score[i+j-1] <-  1.25*(hyper_grid$sens[i+j-1]) + hyper_grid$NPV[i+j-1]
+    }
+}
+
+
+
+NPV_grid <- hyper_grid %>%
+  arrange(desc(NPV),desc(Score),desc(sens)) %>%
+  head(10)
+
+
+head(NPV_grid)
+```
+
+## Optimized on NPV 
+
+```{r eval=FALSE}
+opt.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 4000,
+    mtry            = NPV_grid$mtry[1],
+    min.node.size   = NPV_grid$min.node.size[1],
+    replace         = NPV_grid$replace[1],
+    sample.fraction = NPV_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = F,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+train.pred.rf<- as.factor(ifelse(opt.fit$predictions[,2] > NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(train.pred.rf, train.set$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on NPV
+
+```{r eval=FALSE}
+opt.rf.pred = predict(opt.fit, test.set)
+
+classification.pred.rf<- as.factor(ifelse(opt.rf.pred$predictions[,2]>NPV_grid$cutoff[1],"Yes","No"))
+confusionMatrix(classification.pred.rf, y)
+
+```
+
+## Optimized on Recall 
+
+```{r eval=FALSE}
+
+recall_grid <- hyper_grid%>%
+  arrange(desc(sens)) %>%
+  head(10)
+
+head(recall_grid)
+```
+
+```{r eval=FALSE}
+recall.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 4000,
+    mtry            = recall_grid$mtry[1],
+    min.node.size   = recall_grid$min.node.size[1],
+    replace         = recall_grid$replace[1],
+    sample.fraction = recall_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = F,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+
+recall.rf<- as.factor(ifelse(recall.fit$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.rf, train.set$TJ_Yes)
+
+```
+
+### Test Set Results Optimized on Recall
+
+```{r eval=FALSE}
+opt.recall = predict(recall.fit, test.set)
+
+recall.pred.rf<- as.factor(ifelse(opt.recall$predictions[,2]>recall_grid$cutoff[1],"Yes","No"))
+confusionMatrix(recall.pred.rf, y)
+
+```
+
+
+## Optimized on my custom score 
+
+```{r eval=FALSE}
+
+score_grid<-hyper_grid %>%
+  arrange(desc(Score)) %>%
+  head(10)
+
+head(score_grid)
+```
+
+```{r eval=FALSE}
+score.fit <- ranger(
+    formula         = TJ_Yes ~ ., 
+    data            = train.set, 
+    num.trees       = 4000,
+    mtry            = score_grid$mtry[1],
+    min.node.size   = score_grid$min.node.size[1],
+    replace         = score_grid$replace[1],
+    sample.fraction = score_grid$sample.fraction[1],
+    verbose         = TRUE,
+    seed            = 23,
+    respect.unordered.factors = F,
+    num.threads     = 3,
+    splitrule = "gini",
+    classification = T,
+    probability = T
+  )
+
+
+score.rf<- as.factor(ifelse(score.fit$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.rf, train.set$TJ_Yes)
+
+```
+
+### Testset results with custom score 
+
+```{r eval=FALSE}
+opt.score = predict(opt.fit, test.set)
+
+score.pred.rf<- as.factor(ifelse(opt.score$predictions[,2]>score_grid$cutoff[1],"Yes","No"))
+confusionMatrix(score.pred.rf, y)
+
+```
+
+## Var Imp 
+```{r eval = FALSE}
+varimp.recall <- recall.fit$variable.importance
+recall.imp.df<- data.frame(variable = names(varimp.recall), importance = varimp.recall)
+recall.imp.df <- recall.imp.df %>% 
+  arrange(desc(importance))
+
+ggplot(recall.imp.df[1:20,], aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="tan", high="red")
+
+```
+
+
+
+
+
+# logistic reg
+
+```{r}
+library(glmnet)
+ctrl <- trainControl(method="cv", number=10, classProbs = T)
+set.seed(23) 
+#making logit df
+logit.trainsplit <- trainSplit
+
+
+logit.trainsplit[,c(91:331,333:336)] <- lapply(logit.trainsplit[,c(91:331,333:336)], as.numeric.factor)
+
+logit.test <- test.set
+# logit.test[,91:335] <- lapply(logit.test[,91:335], as.numeric.factor)
+logit.trainsplit <- janitor::clean_names(logit.trainsplit)
+logit.test <- janitor::clean_names(logit.test)
+#running basic logit 
+logitmodel <- train(tj_yes ~.,  data = logit.trainsplit, method = "glm", trControl = ctrl, family = "binomial")
+
+
+logitmodel
+
+confusionMatrix(logitmodel)
+
+train.pred<-predict(logitmodel, logit.trainsplit)
+
+confusionMatrix(train.pred, trainSplit$TJ_Yes, positive = "Yes")
+
+preds<-predict(logitmodel, logit.test, prob = T)
+
+
+levels(y)
+levels(y) <- c("No", "Yes")
+confusionMatrix(as.factor(preds), y, positive = "Yes")
+
+
+```
+
+
+# XGB
+
+## STEP 1 LEARNING RATE 
+```{r}
+library(doParallel)
+cl <- parallel::makeCluster(3, setup_strategy = "sequential")
+registerDoParallel(cl)
+library(xgboost)
+X <- as.matrix(logit.trainsplit[,-332])
+Y <- ifelse(trainSplit$TJ_Yes == "Yes", 1,0)
+```
+
+
+```{r eval = FALSE}
+
+hyper_gridxgb1 <- expand.grid(
+  eta = c(0.3, 0.1, 0.05, 0.01, 0.005),
+  error = 0,          # a place to dump results
+  trees = 0          # a place to dump required number of trees
+)
+
+for(i in seq_len(nrow(hyper_gridxgb1))) {
+  set.seed(23)
+  m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb1$eta[i]
+    ) 
+  )
+  hyper_gridxgb1$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb1$trees[i] <- m$best_iteration
+}
+
+
+
+
+# results
+hyper_gridxgb1 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+```
+
+
+## Tree parameters 
+
+```{r eval = FALSE}
+hyper_gridxgb2 <- expand.grid(
+  eta = 0.3,
+  max_depth = c(1, 3, 5, 7),
+  min_child_weight = c(5, 10, 15),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+
+for(i in seq_len(nrow(hyper_gridxgb2))) {
+  set.seed(23)
+  m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb2$eta[i],
+      max_depth = hyper_gridxgb2$max_depth[i],
+      min_child_weight = hyper_gridxgb2$min_child_weight[i]
+    ) 
+  )
+  hyper_gridxgb2$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb2$trees[i] <- m$best_iteration
+}
+
+
+
+# results
+hyper_gridxgb2 %>%
+  filter(error > 0) %>%
+  arrange(error)
+
+
+```
+
+## GBM attributes 
+
+```{r eval = FALSE}
+hyper_gridxgb3 <- expand.grid(
+  eta = 0.30,
+  max_depth = 7,
+  min_child_weight = 10,
+  subsample = c(0.5, 0.75, 1),
+  colsample_bytree = c(0.5, 0.75, 1),
+  colsample_bynode = c(0.5, 0.75, 1),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+for(i in seq_len(nrow(hyper_gridxgb3))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb3$eta[i], 
+      max_depth = hyper_gridxgb3$max_depth[i],
+      min_child_weight = hyper_gridxgb3$min_child_weight[i],
+      subsample = hyper_gridxgb3$subsample[i],
+      colsample_bytree = hyper_gridxgb3$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb3$colsample_bynode[i]
+    ) 
+  )
+  hyper_gridxgb3$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb3$trees[i] <- m$best_iteration
+}
+
+# results
+hyper_gridxgb3 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+```
+
+## Penalization 
+
+```{r eval = FALSE}
+hyper_gridxgb4 <- expand.grid(
+  eta = 0.3,
+  max_depth = 7, 
+  min_child_weight = 10,
+  subsample = 1, 
+  colsample_bytree = 1,
+  colsample_bynode = 1,
+  gamma = c(0, 1, 10, 100),
+  lambda = c(0, 1e-2, 0.1, 1, 100, 1000),
+  alpha = c(0, 1e-2, 0.1, 1, 100, 1000),
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+# grid search
+for(i in seq_len(nrow(hyper_gridxgb4))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb4$eta[i], 
+      max_depth = hyper_gridxgb4$max_depth[i],
+      min_child_weight = hyper_gridxgb4$min_child_weight[i],
+      subsample = hyper_gridxgb4$subsample[i],
+      colsample_bytree = hyper_gridxgb4$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb4$colsample_bynode[i],
+      gamma = hyper_gridxgb4$gamma[i], 
+      lambda = hyper_gridxgb4$lambda[i], 
+      alpha = hyper_gridxgb4$alpha[i]
+    ) 
+  )
+  hyper_gridxgb4$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb4$trees[i] <- m$best_iteration
+}
+
+# results
+hyper_gridxgb4 %>%
+  filter(error > 0) %>%
+  arrange(error) 
+
+
+
+
+
+```
+
+## Retraining eta with params 
+
+```{r eval = FALSE}
+hyper_gridxgb5 <- expand.grid(
+  eta = c(0.3, 0.1, 0.05, 0.01, 0.005),
+  max_depth = 7, 
+  min_child_weight = 10,
+  subsample = 1, 
+  colsample_bytree = 1,
+  colsample_bynode = 1,
+  gamma = 0,
+  lambda =  1, 
+  alpha = 0,
+  error = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+# grid search
+for(i in seq_len(nrow(hyper_gridxgb5))) {
+  set.seed(23)
+    m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 4000,
+    metrics = 'error', 
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_gridxgb5$eta[i], 
+      max_depth = hyper_gridxgb5$max_depth[i],
+      min_child_weight = hyper_gridxgb5$min_child_weight[i],
+      subsample = hyper_gridxgb5$subsample[i],
+      colsample_bytree = hyper_gridxgb5$colsample_bytree[i],
+      colsample_bynode = hyper_gridxgb5$colsample_bynode[i],
+      gamma = hyper_gridxgb5$gamma[i], 
+      lambda = hyper_gridxgb5$lambda[i], 
+      alpha = hyper_gridxgb5$alpha[i]
+    ) 
+  )
+  hyper_gridxgb5$error[i] <- min(m$evaluation_log$test_error_mean)
+  hyper_gridxgb5$trees[i] <- m$best_iteration
+}
+# results
+hyper_gridxgb5 %>%
+  filter(error > 0) %>%
+  arrange(error)# %>%
+  # glimpse()
+
+
+
+
+
+
+```
+
+## Final XBoost
+
+```{r}
+params <- list(
+  eta = 0.3,
+  max_depth = 7, 
+  min_child_weight = 10,
+  subsample = 1, 
+  colsample_bytree = 1,
+  colsample_bynode = 1,
+  gamma = 0,
+  lambda = 1,
+  alpha = 0
+)
+
+
+set.seed(23)
+xgb.opt.july<- xgboost(
+  params = params,
+  data = X,
+  label = Y,
+  nrounds = 650,
+  objective = "binary:logistic",
+  verbose = 0
+)
+#saveRDS(xgb.opt.july, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/xgbopt julycut.rds")
+xgb.opt.july <- readRDS("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/xgbopt julycut.rds")
+
+xgboost.pred.train <-predict(xgb.opt.july, X)
+xgboost.pred.train <- as.factor(ifelse(xgboost.pred.train >= 0.5, "Yes", "No"))
+confusionMatrix(xgboost.pred.train, trainSplit$TJ_Yes)
+
+
+```
+
+## Test Set Performance 
+```{r}
+xgboost.pred <-predict(xgb.opt.july, as.matrix(logit.test))
+xgboost.pred <- as.factor(ifelse(xgboost.pred >= 0.5, "Yes", "No"))
+confusionMatrix(xgboost.pred, y)
+
+```
+
+## Var Imp Optimal Model 
+
+```{r}
+library(vip)
+xbg.imp <- vip(xgb.opt.july, num_features = 28, geom='point', aesthetics = list(color = "steelblue"))
+
+xgb.imp.df <- xbg.imp$data[c(1:20),]
+
+xgb.imp.df$variable <- c(
+  "Q2 of Splitter X Break",
+  "Games Started",
+  "Intentional Walks",
+  "Formatted Number of Knuckle Curves",
+  "Number of Pitches Outside Strike Zone",
+  "Pulled Ball Percentage",
+  "Balks",
+  "Month of Debut",
+  "Player Age",
+  "Q3 of Sinker Z Break",
+  "Birth Year",
+  "Q2 Curve Ball Average Speed",
+  "Does Not Throw Curveball Flag",
+  "Hard Hit Percentage",
+  "Does Not Throw Sinker Flag",
+  "Weight",
+  "Ground Ball Double Plays",
+  "Height",
+  "Games Finished",
+  "Bottom 25% Breaking Ball Speed")
+
+xgb.imp.df <- xgb.imp.df %>% 
+  arrange(desc(Importance))
+
+ggplot(xgb.imp.df, aes(x=reorder(variable,Importance), y=Importance,fill=Importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("XGBoost Information Value Summary")+
+      guides(fill=F)+
+      scale_fill_gradient(low="grey", high="steelblue")
+
+
+
+```
+
+# Model Ensemble 
+
+```{r}
+library(SuperLearner)
+set.seed(23)
+
+
+
+#XGB learner
+xgboost.learner <- create.Learner("SL.xgboost",  params = list(eta = 0.3, max_depth = 7, min_child_weight = 10, subsample = 1, colsample_bytree = 1, colsample_bynode = 1, gamma = 0, lambda = 1, alpha = 0))
+
+#RF on PPV 
+ranger.PPV <- create.Learner("SL.ranger", params = list(num.trees = 4000, mtry=134, min.node.size=1, replace=TRUE, sample.fraction=0.75))
+
+#RF on recall
+ranger.recall <- create.Learner("SL.ranger",params = list(num.trees = 4000, mtry=16, min.node.size=1, replace=FALSE, sample.fraction=0.75))
+
+#RF on score
+ranger.score <- create.Learner("SL.ranger", params = list(num.trees = 4000, mtry=111, min.node.size=1, replace=FALSE, sample.fraction=0.75))
+
+#Logistic Learner 
+set.seed(23)
+y.sl <- ifelse(logit.trainsplit$tj_yes == "Yes", 1 ,0)
+sl.logit <- SuperLearner(Y = y.sl, X = logit.trainsplit[,-332], SL.library = "SL.glm")
+
+```
+
+## Fit learner 
+
+```{r}
+set.seed(23)
+#cv.SL1 <- CV.SuperLearner(Y = y.sl, X = logit.trainsplit[,-332], family = binomial(),V = 10, SL.library = c(ranger.PPV$names,ranger.recall$names,ranger.score$names, xgboost.learner$names, "SL.glm"))
+
+#saveRDS(cv.SL1, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/superlearner.rds")
+
+SL <- readRDS("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/superlearner.rds")
+
+summary(SL)
+```
+
+## Learner Results 
+
+```{r}
+plot(SL) + 
+  theme_bw()
+
+
+```
+
+weights 
+
+```{r}
+review_weights = function(cv_sl) {
+  meta_weights = coef(cv_sl)
+  means = colMeans(meta_weights)
+  sds = apply(meta_weights, MARGIN = 2,  FUN = sd)
+  mins = apply(meta_weights, MARGIN = 2, FUN = min)
+  maxs = apply(meta_weights, MARGIN = 2, FUN = max)
+  # Combine the stats into a single matrix.
+  sl_stats = cbind("mean(weight)" = means, "sd" = sds, "min" = mins, "max" = maxs)
+  # Sort by decreasing mean weight.
+  sl_stats[order(sl_stats[, 1], decreasing = TRUE), ]
+}
+
+
+print(review_weights(SL), digits = 3)
+
+
+```
+
+
+```{r}
+
+library(doParallel)
+cl <- parallel::makeCluster(3, setup_strategy = "sequential")
+parallel::clusterEvalQ(cl, library(SuperLearner))
+parallel::clusterExport(cl, c(ranger.PPV$names,ranger.recall$names,ranger.score$names, xgboost.learner$names, "SL.glm"))
+parallel::clusterSetRNGStream(cl, 23)
+
+
+final.SL.july <- snowSuperLearner(Y = y.sl, X = logit.trainsplit[,-332], family = binomial(),cluster = cl , SL.library = c(ranger.PPV$names,ranger.recall$names,ranger.score$names, xgboost.learner$names, "SL.glm"))
+
+
+#saveRDS(final.SL.july, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/finalsuperlearner julycutoff.rds")
+
+
+full.SL.july <- readRDS("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/finalsuperlearner julycutoff.rds")
+
+full.SL.july
+```
+## Training Set Prediction 
+
+```{r}
+full.SL.train.pred <- predict(full.SL.july, logit.trainsplit[,-332],onlySL = TRUE)
+
+finalSL.pred.train <- as.factor(ifelse(full.SL.train.pred$pred>= 0.5, "Yes", "No"))
+confusionMatrix(finalSL.pred.train, logit.trainsplit$tj_yes)
+```
+
+## Adjust cutoff 
+
+```{r}
+Super.Learner.Recall = c()
+Super.Learner.Precision = c()
+cutoff.seq <- seq(0.05, 0.95, by = 0.05)
+for (i in 1:length(cutoff.seq)){
+finalSL.pred.4 <- as.factor(ifelse(full.SL.train.pred$pred >= cutoff.seq[i], "Yes", "No"))
+CM <- confusionMatrix(finalSL.pred.4, logit.trainsplit$tj_yes)
+Super.Learner.Recall[i] <- CM$byClass[2]
+Super.Learner.Precision[i] <- CM$byClass[4]
+}
+
+```
+
+```{r}
+library("reshape2")
+Super.Learner.Results <- data.frame("Recall" = Super.Learner.Recall, "Precision" = Super.Learner.Precision, "Threshold" = cutoff.seq
+)
+
+Super.Learner.Results.LF  <- melt(Super.Learner.Results, id="Threshold")
+ggplot(Super.Learner.Results.LF, aes(x = Threshold, y = value))+
+  geom_point(size=2,  aes(color = variable))+
+  geom_line(aes(linetype = variable))+
+  labs(title="Training Set Performance by Probability Cutoff",x="Threshold", y = "")+
+  theme_classic()+
+  scale_color_manual(values=c('#999999','#9999FF'))+
+   scale_x_continuous(breaks=seq(0,1,.1))+
+  scale_y_continuous(breaks=seq(0,1,.1))
+  
+  
+
+
+```
+
+
+
+
+
+
+
+
+## Super learner prediction Test Set 
+```{r}
+SL.pred <- predict(full.SL.july,logit.test, onlySL = TRUE)
+finalSL.pred <- as.factor(ifelse(SL.pred$pred >= 0.5, "Yes", "No"))
+confusionMatrix(finalSL.pred, y)
+
+```
+
+## what if we adjust the cutoff 
+
+```{r}
+Super.Learner.Recall = c()
+Super.Learner.Precision = c()
+cutoff.seq <- seq(0.05, 0.95, by = 0.05)
+for (i in 1:length(cutoff.seq)){
+finalSL.pred.4 <- as.factor(ifelse(SL.pred$pred >= cutoff.seq[i], "Yes", "No"))
+CM <- confusionMatrix(finalSL.pred.4, y)
+Super.Learner.Recall[i] <- CM$byClass[2]
+Super.Learner.Precision[i] <- CM$byClass[4]
+}
+
+```
+
+```{r}
+library("reshape2")
+Super.Learner.Results <- data.frame("Recall" = Super.Learner.Recall, "Precision" = Super.Learner.Precision, "Threshold" = cutoff.seq
+)
+
+Super.Learner.Results.LF  <- melt(Super.Learner.Results, id="Threshold")
+ggplot(Super.Learner.Results.LF, aes(x = Threshold, y = value))+
+  geom_point(size=2,  aes(color = variable))+
+  geom_line(aes(linetype = variable))+
+  labs(title="Test Set Performance by Probability Cutoff",x="Threshold", y = "")+
+  theme_classic()+
+  scale_color_manual(values=c('#999999','#9999FF'))+
+   scale_x_continuous(breaks=seq(0,1,.1))+
+  scale_y_continuous(breaks=seq(0,1,.1))
+  
+  
+
+
+```
+
+
+Both graphs suggest the cutoff to be better around 0.65 - 0.75
+```{r}
+
+opt.cutoff <- as.factor(ifelse(SL.pred$pred >= 0.65, "Yes", "No"))
+confusionMatrix(opt.cutoff, y)
+
+
+```
+
+Visualizing Probability Results
+
+```{r}
+library(ggbeeswarm)
+Vis.Results <- data.frame("PredictedProbability" = SL.pred$pred, "UnderwentSurgery" = y)
+
+ggplot(Vis.Results, aes(y = PredictedProbability, x = UnderwentSurgery, fill = UnderwentSurgery, color = UnderwentSurgery)) +
+    geom_beeswarm() +
+    geom_boxplot(alpha = 0, color = "black") +
+    theme_minimal() +
+    ylab("Stacked Model Prediction") +
+    xlab("Underwent Surgery") +
+    scale_fill_brewer(guide = FALSE, palette = "Paired") +
+    scale_color_brewer(guide = FALSE, palette = "Paired") 
+yes_group = subset(Vis.Results, Vis.Results$UnderwentSurgery == "Yes")
+no_group = subset(Vis.Results, Vis.Results$UnderwentSurgery == "No")
+
+ggplot(Vis.Results, aes(PredictedProbability,..density.., fill = UnderwentSurgery)) +
+    geom_density(alpha = 0.5) +
+    xlab("Predicted Probability Underwent Surgery")+
+  ylab("Density")+
+    scale_fill_manual(values = c("steelblue","grey"))+
+  labs(fill = "Underwent Surgery")+
+  ggtitle("Predicted Probabilities Dist. Between Groups")
+
+
+ggplot(Vis.Results, aes(PredictedProbability,..density.., fill = UnderwentSurgery)) +
+    geom_histogram(binwidth = 0.01,position="identity") +
+    xlab("Predicted Probability Underwent Surgery")+
+    scale_fill_manual(values = c("steelblue","grey"))+
+  labs(fill = "Underwent Surgery")
+
+
+
+
+baser.check <- ggplot(data = yes_group, aes(x=PredictedProbability))+
+geom_density(alpha=0.5, fill='blue') +
+geom_density(data = no_group, aes(x=PredictedProbability,y=..scaled..), alpha=0.5, fill='red') +
+labs(title = "Base R Split")+
+labs(y="Density")+
+labs(x="Point Differential")
+
+baser.check
+
+
+```
+
+```{r}
+library(classifierplots)
+library(gbm)
+
+Vis.Results$UnderwentSurgery <- relevel(Vis.Results$UnderwentSurgery, ref = "Yes")
+calib <- calibration(UnderwentSurgery ~ PredictedProbability, data = Vis.Results)
+xyplot(calib, auto.key = list(columns = 2),main="Calibration Plot of Test Set Predictions")
+
+
+
+# Vis.Results$Binary <- ifelse(Vis.Results$UnderwentSurgery == "Yes",1,0)
+# calibration_plot(y, SL.pred$pred)+
+#   geom_hline(yintercept = 01.9, color = 'red')
+# 
+# calibrate.plot(Vis.Results$UnderwentSurgery, Vis.Results$PredictedProbability)
+#   abline(h=0.019, col="red")
+# 
+# positives_plot(Vis.Results$Binary, Vis.Results$PredictedProbability)+
+#   geom_hline(yintercept = 01.9, color = 'red')
+# 
+# propensity_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02)+
+#   geom_hline(yintercept = 01.9, color = 'red')
+# 
+# recall_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02, show_numbers = T)
+```
+
