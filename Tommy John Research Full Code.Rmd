@@ -1,4 +1,451 @@
 ---
+title: "Full Tommy John RMD"
+author: "Tim Morales"
+date: "12/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Cleaning
+
+```{r}
+library(tidyverse)
+```
+
+## Tommy John List 
+
+The first dataset we will handle is the list of all surgeries. We are only keeping those whose injury is after August 2015 so we can use statcast information on their injury. If surgery was done in August or later of a year, that same year's statistics will be used, if done before august, the prior year is used. All 2020s will use 2019 due to weird shortened season. 
+
+```{r}
+tj_list<-read.csv('/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/TJ List.csv')
+table(tj_list$Level)
+tj_list$Year_Mon<-as.numeric(paste(tj_list$Year,tj_list$Month,sep=""))
+
+
+#keep everyone up to sept 2015 
+mlb_only_tj_list<-subset(tj_list, Level=="MLB" & Year_Mon >= 20158)
+mlb_only_tj_list<-subset(mlb_only_tj_list, Level=="MLB" & Year >= 2015)
+table(mlb_only_tj_list$Level)
+
+
+#create a variable to denote the last year before their surgery 
+#if they got surgery after or during aril  in that year
+# we can use the same season. 
+#if before april, we use year prior.
+
+mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Mon >= 3, mlb_only_tj_list$Year,mlb_only_tj_list$Year - 1) 
+
+##############################3
+#### ABOVE IS WHERE WE CHANGE THE >= TO 7 TO CREATE THE JULY 31ST CUTOFF
+###############################
+#if surgery done in 2020, auto use 2019
+mlb_only_tj_list$Year_for_stats<-ifelse(mlb_only_tj_list$Year==2020, 2019, mlb_only_tj_list$Year_for_stats)
+```
+
+
+Then we must look at players who repeated surgery. If they have undergone surgery twice, put that in a new column, with binary 1 0, 1 deonting repeated. We also feature the column for those with repeated surgery how many years between surgery.
+
+```{r}
+df_repeated<- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Repeat TJ List.csv")
+df_repeated<-df_repeated[!is.na(df_repeated$Years.Between),]
+#merge together 
+mlb_only_tj_list<-left_join(mlb_only_tj_list,df_repeated[,c(1,4)], by = "Player")
+
+mlb_only_tj_list$Repeat_Injury<-ifelse(is.na(mlb_only_tj_list$Years.Between),0,1)
+
+#then lets keep only the pitchers 
+mlb_only_tj_list<-mlb_only_tj_list%>%
+  filter(Position == "P")
+
+```
+
+Merge the names
+
+I have a player list from Tanner Bell, MLB author. 
+```{r}
+translator.list<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SFBB Player ID Map - PLAYERIDMAP.csv")
+translator.list$fgid<-translator.list$IDFANGRAPHS
+translator.list$bbrefid<-translator.list$IDPLAYER
+```
+
+I can now use left_join to add the bbrefIDs to the TJ list using fangraphs ID. 
+
+
+There are still a few that do not have bbrefID, for them I will look up on my own and store in csv, then import. 
+
+```{r}
+tj.list.Id<-left_join(mlb_only_tj_list,translator.list[,c(43,44)], by = "fgid")
+
+missing.indx<-which(is.na(tj.list.Id$bbrefid))
+missing.names<-tj.list.Id$Player[missing.indx]
+missing.names
+
+hand.filled.id<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/manual fill bbref for missing.csv")[,c(1,2)]
+
+#fill those missing values that I hand filled 
+tj.list.Id$bbrefid[missing.indx]<-hand.filled.id$bbrefid
+
+#just checking 
+#tj.list.Id[,c(1,47)]
+```
+
+So now for me to be able to merge all of these labels together I will do so by baseball reference ID as it appears in all data sets. 
+
+```{r}
+#LAHMAN stats 
+pitching <- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/Pitching.csv")
+
+#only keep after 2015 and making summing stats for each player each year
+pitching<-pitching%>%
+  filter(yearID >= 2015)
+   
+#get team with most innings played for when played for multiple teams
+player.teams<-pitching[,c(1,2,4,5,13)]%>%
+    group_by(playerID, yearID)%>%
+   arrange(by_group=desc(IPouts))%>%
+   filter(row_number() == 1)
+
+pitching<-pitching[,-c(3,4,5,19,20)]
+pitching<-aggregate(.~playerID+yearID,pitching, sum)
+
+#add the character variables back on DOESNT WORK I NEED TO ONLY GET FIRST
+pitching<-left_join(pitching, player.teams[,-5], by = c('playerID', 'yearID'))
+
+#import names translation 
+namelist<- read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/People.csv")
+
+#inner join to get each player its needed labels 
+named_pitching<- inner_join(pitching, namelist, by= 'playerID')
+
+```
+
+post season pitching
+
+I dont have to be concerned with two teams in same year here but i need to combine each series for each player
+```{r}
+post.season.pitching<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/baseballdatabank-master/core/PitchingPost.csv")
+
+#dropping calculated stats and characters like league and playoff round
+post.season.pitching<-post.season.pitching[,-c(3,4,5,19,20)]
+
+#combine stats across series 
+post.season.pitching<-post.season.pitching%>%
+  filter(yearID >= 2015)%>%
+   group_by(playerID, yearID)%>%
+   summarise_each(funs(sum))
+               
+               
+```
+
+The next step is to left join, adding injury information to players but only on the years being used as stats. 
+
+Now we need to work with Sabermetrics datasets. 
+MINIMUM 10 PA IN THESE LOWEST REQUIREMENT
+
+```{r}
+SM2015<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2015SM.csv")
+SM2016<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2016SM.csv")
+SM2017<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2017SM.csv")
+SM2018<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2018SM.csv")
+SM2019<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/2019SM.csv")
+
+
+#combine into one df 
+SMALL<-rbind(SM2015,SM2016,SM2017,SM2018,SM2019)
+colnames(SMALL)[1]<-"nameLast"
+colnames(SMALL)[2]<-"nameFirst"
+colnames(SMALL)[3]<-"yearID"
+```
+
+Try and correctly merge 
+```{r}
+#make full name 
+SMALL$PlayerName<- paste(SMALL$nameFirst,SMALL$nameLast,sep=" ")
+
+#remove leading and trailing
+SMALL$PlayerName<-trimws(SMALL$PlayerName, which = c("both"), whitespace = "[ \t\r\n]")
+
+#NAMED PITCHING CLEANING 
+
+named_pitching$nameFirst<-gsub("\\. ","\\.",named_pitching$nameFirst)
+
+named_pitching$PlayerName<-paste(named_pitching$nameFirst,named_pitching$nameLast,sep=" ")
+
+#remove leading and trailing
+
+named_pitching$PlayerName<-trimws(named_pitching$PlayerName, which = c("both"), whitespace = "[ \t\r\n]")
+
+```
+
+
+
+```{r}
+#first go to see who is missing
+ij.pitch<-inner_join(SMALL,named_pitching, by = c("PlayerName","yearID"))
+
+#we will track who is missing and manually fill w bbref id 
+overlap<-SMALL$PlayerName %in% ij.pitch$PlayerName 
+namecon<-data.frame(PlayerName=SMALL$PlayerName[overlap==F], yearID=SMALL$yearID[overlap==F])
+
+# this just shows that these names are NOT the same between the two datasets.
+# namecon$name %in% SMALL$PlayerName
+# namecon$name %in% named_pitching$PlayerName
+```
+
+```{r}
+#import overlap baseball reference numbers I hand filled 
+SM.fill<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/nameissues.csv")
+
+namecon$bbrefID<-SM.fill$bbrefID
+
+SM.fill.test<-left_join(namecon, named_pitching, by=c("bbrefID", "yearID"))
+colnames(SM.fill.test)[1] = "PlayerName"
+
+misfits<-anti_join(SMALL,named_pitching, by = c("PlayerName","yearID"))
+
+rj.pitch<-right_join(SM.fill.test,misfits, by = c("PlayerName", "yearID"))
+rj.pitch<-rj.pitch[,-52]
+df.final<-rbind(ij.pitch,rj.pitch)
+
+# colnames(rjpitch) %in% colnames(ij.pitch)
+
+#making sure information is proper 
+#removing duplicates 
+
+df.final<-unique(df.final)
+
+#looking for missing 
+missing.inform<-is.na(df.final$p_game)
+# 
+# df.final$PlayerName[missing.inform==T]
+
+#inconsistency in counting stat to confirm correct 
+inconsist<-df.final$p_game == df.final$G
+table(inconsist)
+
+### we have to drop these people due to inconsistency in data 
+df.final$PlayerName[inconsist==F]
+
+## drop those 
+df.pitch<-df.final[inconsist,]
+```
+
+In all, I have 3645 observations out of 3651 eligble season retained. Those dropped had either no Lahman data or could not be confirmed as reliable information. 
+
+I now need to add the postseason information which I can do by player and playerID and yearID
+
+```{r}
+colnames(post.season.pitching)[-c(1,2)]<-paste("post",colnames(post.season.pitching)[-c(1,2)], sep ="_" )
+
+post.season.pitching$bbrefID = post.season.pitching$playerID
+
+df.plus.post<-left_join(df.pitch,post.season.pitching, by = c("playerID", "yearID"))
+
+```
+
+Finally, I have to add the tommy john information where needed 
+
+```{r}
+colnames(tj.list.Id)[47]<-"bbrefID"
+colnames(tj.list.Id)[44]<-"yearID"
+
+#make my TJ flag
+tj.list.Id$TJ<-1
+tj.list.Id[,-c(22:42)]
+
+colnames(df.plus.post)[160]<-"bbrefID"
+
+#able to keep 97 players with TJ 
+df.total<-left_join(df.plus.post, tj.list.Id, by = c( "bbrefID", "yearID"))
+
+#create the flag 
+df.total$TJ<-ifelse(is.na(df.total$TJ), 0, 1)
+
+```
+
+
+We will require that pitchers face at least 30 batters in that season, going off of michigan papers' 10 innings. We lose 5 TJ players. and over 200 regular players. 
+
+```{r}
+
+injured <- subset(df.total, df.total$TJ == 1)
+which(injured$BFP<30)
+injured$PlayerName[which(injured$BFP<30)]
+
+#keep only those with more than 30 batters faced 
+df.total <- subset(df.total, df.total$BFP >= 30)
+
+#write.csv(df.total, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
+```
+
+---
+title: "TJ Feature Engineering"
+author: "Tim Morales"
+date: "10/24/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/Fully Joined Df.csv")
+```
+
+Im going to drop a lot of the tommy john info as its either irrelevant or repeated elsewhere. 
+
+Dropping and Flagging Variables 
+```{r}
+## removing random surgery information 
+colnames(df[, c(185:228)])
+df<-df[, -c(185:228)]
+
+# make yearID and TJ a factor
+df$yearID <- as.factor(df$yearID)
+df$TJ<-as.factor(df$TJ)
+levels(df$TJ) = c("No", "Yes")
+
+
+#make a made postseason flag 
+df$made_postseason = as.factor(ifelse(is.na(df$post_IPouts),0,1))
+
+#i can fill playoff NAs with 0 
+#colnames(df[,c(162:186)])
+df[,c(162:186)][is.na(df[c(162:186)])] <- 0
+
+#Making a pitchs per game stat 
+df$pitches_per_game<- (df$pitch_count / df$p_game)
+
+#Percentages if NA set to 0 
+formatted.names<- c("n_ff_formatted","n_sl_formatted","n_ch_formatted","n_cukc_formatted","n_sift_formatted","n_fc_formatted","n_kn_formatted","n_fs_formatted", "n_fastball_formatted","n_breaking_formatted","n_offspeed_formatted")
+df[formatted.names][is.na(df[formatted.names])] <- 0
+
+
+```
+
+
+Previous paper shows warm high schools increase risk. We use birth place and assign based on states in paper as well as handselected warm countries. 
+
+```{r}
+#warm weather indicator 
+warmstates<- c("CA","AZ","NM","TX","LA","MS","AL","GA","FL","SC")
+outsideUSCold<-c("Lithuania","Germany","CAN", "USA")
+#print all countries 
+levels(as.factor(df$birthCountry))
+
+df$warm_birth_place <- ifelse(df$birthState %in% warmstates,1,0)
+#make "notin"
+`%notin%` <- Negate(`%in%`)
+#outside US 
+df$warm_birth_place <- as.factor(ifelse(df$birthCountry %notin% outsideUSCold,1,df$warm_birth_place))
+```
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+#drop the 1 missing player nameFirst
+### check miss to be fixed 
+# colSums(is.na(df))
+#i drop the below columns because theyre either not usefully or impossible to impute
+df<- df %>% 
+   mutate(debut = ymd(debut)) %>% 
+  mutate_at(vars(debut), funs(year, month, day))%>%
+  select(-c("meatball_swing_percent", "deathYear","deathMonth","deathDay","deathCountry","deathState","deathCity", "nameLast.y","nameFirst.y","X","X.1","birthMonth","birthDay","birthCountry","birthState","birthCity","nameGiven", "finalGame", "day", "debut", "n"))
+
+#make the debut variable into year and month of debut 
+df <- rename(df, c("year_debut" = "year" , "month_debut"= "month"))
+df1<-df
+```
+
+Bin variables with lots of missing 
+```{r}
+
+df.not.bin<- df
+
+col.w.na = colSums(is.na(df)) > 0
+ 
+
+library(OneR)
+
+col.w.na.names<-colnames(df)[col.w.na]
+#col.w.na.names
+
+#i make the function i want 
+bin.omit.false<- function(x){
+  bin(x, nbins = 4, na.omit = F, labels = c("Bottom_25", "Q2", "Q3", "Top_25")) }
+
+doesnt.throw<- function(x){
+  x<-ifelse(is.na(x)==T, "Does_Not_Throw", x)
+}
+
+df[col.w.na.names]<- lapply(df[col.w.na.names], bin.omit.false)
+
+```
+
+Feature engineer making these per inning stats 
+
+```{r}
+df$pitch_per_out <- (df$pitch_count/ df$IPouts)
+df$innings_per_game <- (df$IPouts/ df$G.x)
+df$pitcher_per_BF <- df$pitch_count/ df$BFP
+df$batters_per_inning <- df$BFP / (df$IPouts/3)
+
+
+df$fastball_per_inning <- df$pitch_count_fastball / (df$IPouts/3)
+df$breakingball_per_inning <- df$pitch_count_breaking / (df$IPouts/3)
+```
+
+We remove nearzero variane variables unless they are related to previous research like IP or BFP
+
+```{r}
+library(caret)
+nzv <- nearZeroVar(df)
+
+colnames(df)[nzv]
+
+nzv.final <- nzv[-c(11,14,15,25,33)]
+
+df<- df[,-nzv.final]
+
+```
+
+
+
+One hot encode the factors using recipe 
+
+```{r}
+
+# Drop identifying character variables 
+df.onehot <- df %>%
+  select(- c("nameLast.x", "nameFirst.x", "PlayerName", "playerID", "teamID", "retroID", "bbrefID"))
+
+
+
+
+library(recipes)
+rec = recipe( ~ ., data = df.onehot)
+rec_2 = rec %>% 
+  step_dummy(all_predictors(),-all_numeric(), one_hot = T)
+d_prep=rec_2 %>% prep(training = df.onehot, retain = T)
+
+df.juice<-juice(d_prep)
+
+
+# 
+# write.csv(df.juice, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
+
+```
+
+
+---
 title: "TJ Modeling"
 author: "Tim Morales"
 date: "11/20/2020"
@@ -10,8 +457,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData test.csv")
+### USE THIS IF YOU WANT THE RESULTS FOR MARCH 31 cut off 
+df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData.csv")
 df<- df[,-1]
+
+# use this if you want the July 31st cutoff data
+#df<-read.csv("/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/ModelReadyData July.csv")
 
 #train test split
 library(DMwR)
@@ -39,9 +490,9 @@ test.set[,c(1:90)]<- lapply(test.set[,c(1:90)], scale)
 
 
 ```{r warning= FALSE}
-# write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
+#write.csv(test.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/testset.csv") 
 # 
-# write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
+#write.csv(train.set, "/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/trainset.csv") 
 
 #set y and remove from test set
 y<-as.factor(test.set$TJ_Yes)
@@ -71,7 +522,7 @@ table(trainSplit$TJ_Yes)
 
 prop.table(table(trainSplit$TJ_Yes))
 
-# write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
+#write.csv(trainSplit,"/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/SMOTETRAIN.csv")
 
 
 ```
@@ -1145,7 +1596,7 @@ confusionMatrix(finalSL.pred, y)
 ```{r}
 Super.Learner.Recall = c()
 Super.Learner.Precision = c()
-cutoff.seq <- seq(0.05, 0.95, by = 0.05)
+cutoff.seq <- seq(0.05, 0.95, by = 0.01)
 for (i in 1:length(cutoff.seq)){
 finalSL.pred.4 <- as.factor(ifelse(SL.pred$pred >= cutoff.seq[i], "Yes", "No"))
 CM <- confusionMatrix(finalSL.pred.4, y)
@@ -1167,8 +1618,9 @@ ggplot(Super.Learner.Results.LF, aes(x = Threshold, y = value))+
   labs(title="Test Set Performance by Probability Cutoff",x="Threshold", y = "")+
   theme_classic()+
   scale_color_manual(values=c('#999999','#9999FF'))+
-   scale_x_continuous(breaks=seq(0,1,.1))+
-  scale_y_continuous(breaks=seq(0,1,.1))
+   scale_x_continuous(breaks=seq(0,1,.060))+
+  scale_y_continuous(breaks=seq(0,1,.1))+
+  geom_vline(xintercept = 0.66, color = "red")
   
   
 
@@ -1227,9 +1679,6 @@ labs(title = "Base R Split")+
 labs(y="Density")+
 labs(x="Point Differential")
 
-baser.check
-
-
 ```
 
 ```{r}
@@ -1240,21 +1689,30 @@ Vis.Results$UnderwentSurgery <- relevel(Vis.Results$UnderwentSurgery, ref = "Yes
 calib <- calibration(UnderwentSurgery ~ PredictedProbability, data = Vis.Results)
 xyplot(calib, auto.key = list(columns = 2),main="Calibration Plot of Test Set Predictions")
 
+Vis.Results$Binary <- ifelse(Vis.Results$UnderwentSurgery == "Yes",1,0)
+calibration_plot(y, SL.pred$pred)+
+  geom_hline(yintercept = 01.9, color = 'red')
 
+calibrate.plot(Vis.Results$UnderwentSurgery, Vis.Results$PredictedProbability)
+  abline(h=0.019, col="red")
 
-# Vis.Results$Binary <- ifelse(Vis.Results$UnderwentSurgery == "Yes",1,0)
-# calibration_plot(y, SL.pred$pred)+
-#   geom_hline(yintercept = 01.9, color = 'red')
-# 
-# calibrate.plot(Vis.Results$UnderwentSurgery, Vis.Results$PredictedProbability)
-#   abline(h=0.019, col="red")
-# 
-# positives_plot(Vis.Results$Binary, Vis.Results$PredictedProbability)+
-#   geom_hline(yintercept = 01.9, color = 'red')
-# 
-# propensity_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02)+
-#   geom_hline(yintercept = 01.9, color = 'red')
-# 
-# recall_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02, show_numbers = T)
+positives_plot(Vis.Results$Binary, Vis.Results$PredictedProbability)+
+  geom_hline(yintercept = 01.9, color = 'red')
+
+propensity_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02)+
+  geom_hline(yintercept = 01.9, color = 'red')
+
+recall_plot(Vis.Results$Binary, Vis.Results$PredictedProbability, granularity = 0.02, show_numbers = T)
 ```
+
+
+
+
+
+
+
+
+
+
+
 
