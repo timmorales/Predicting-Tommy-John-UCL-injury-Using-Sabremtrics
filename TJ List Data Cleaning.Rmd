@@ -19,7 +19,6 @@ library(tidyverse)
 
 ## Tommy John List 
 
-The first dataset we will handle is the list of all surgeries. We are only keeping those whose injury is after August 2015 so we can use statcast information on their injury. If surgery was done in August or later of a year, that same year's statistics will be used, if done before august, the prior year is used. All 2020s will use 2019 due to weird shortened season. 
 
 ```{r}
 tj_list<-read.csv('/Users/timmorales/Desktop/STAT 6341/Tommy John Project/Data/TJ List.csv')
